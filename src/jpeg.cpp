@@ -60,28 +60,28 @@ constexpr u8 kAcValChroma[162] = {
 };
 
 struct DctBasis {
-    float m[8][8]; // m[u][x] = 0.5 * c(u) * cos((2*x + 1) * u * pi / 16)
+    f32 m[8][8]; // m[u][x] = 0.5 * c(u) * cos((2*x + 1) * u * pi / 16)
 };
 
-consteval double cos_pi_over_16(int k_raw) {
-    constexpr double kPi = 3.14159265358979323846264338327950288;
+consteval f64 cos_pi_over_16(int k_raw) {
+    constexpr f64 kPi = 3.14159265358979323846264338327950288;
     int k = k_raw % 32;
     if (k < 0) k += 32;
     if (k > 16) k = 32 - k;
     if (k == 0) return 1.0;
     if (k == 8) return 0.0;
     if (k == 16) return -1.0;
-    double sign = 1.0;
+    f64 sign = 1.0;
     if (k > 8) {
         k = 16 - k;
         sign = -1.0;
     }
-    const double theta = as<double>(k) * (kPi / 16.0);
-    const double t2 = theta * theta;
-    double term = 1.0;
-    double sum = 1.0;
+    const f64 theta = as<f64>(k) * (kPi / 16.0);
+    const f64 t2 = theta * theta;
+    f64 term = 1.0;
+    f64 sum = 1.0;
     for (int n = 1; n <= 12; ++n) {
-        term *= -t2 / as<double>((2 * n - 1) * (2 * n));
+        term *= -t2 / as<f64>((2 * n - 1) * (2 * n));
         sum += term;
     }
     return sign * sum;
@@ -89,11 +89,11 @@ consteval double cos_pi_over_16(int k_raw) {
 
 consteval DctBasis build_dct_basis() {
     DctBasis b{};
-    constexpr double kInvSqrt2 = 0.707106781186547524400844362104849039;
+    constexpr f64 kInvSqrt2 = 0.707106781186547524400844362104849039;
     for (int u = 0; u < 8; ++u) {
-        const double cu = (u == 0) ? kInvSqrt2 : 1.0;
+        const f64 cu = (u == 0) ? kInvSqrt2 : 1.0;
         for (int x = 0; x < 8; ++x) {
-            b.m[u][x] = as<float>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
+            b.m[u][x] = as<f32>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
         }
     }
     return b;
@@ -102,11 +102,11 @@ consteval DctBasis build_dct_basis() {
 constexpr DctBasis kDct = build_dct_basis();
 
 // Separable 2D IDCT: out = M^T * in * M
-void idct8x8(const float in[64], float out[64]) noexcept {
-    float tmp[64];
+void idct8x8(const f32 in[64], f32 out[64]) noexcept {
+    f32 tmp[64];
     for (int v = 0; v < 8; ++v) {
         for (int x = 0; x < 8; ++x) {
-            float sum = 0.0f;
+            f32 sum = 0.0f;
             for (int u = 0; u < 8; ++u) {
                 sum += in[v * 8 + u] * kDct.m[u][x];
             }
@@ -115,7 +115,7 @@ void idct8x8(const float in[64], float out[64]) noexcept {
     }
     for (int y = 0; y < 8; ++y) {
         for (int x = 0; x < 8; ++x) {
-            float sum = 0.0f;
+            f32 sum = 0.0f;
             for (int v = 0; v < 8; ++v) {
                 sum += kDct.m[v][y] * tmp[v * 8 + x];
             }
@@ -125,11 +125,11 @@ void idct8x8(const float in[64], float out[64]) noexcept {
 }
 
 // Separable 2D FDCT: out = M * in * M^T
-void fdct8x8(const float in[64], float out[64]) noexcept {
-    float tmp[64];
+void fdct8x8(const f32 in[64], f32 out[64]) noexcept {
+    f32 tmp[64];
     for (int y = 0; y < 8; ++y) {
         for (int u = 0; u < 8; ++u) {
-            float sum = 0.0f;
+            f32 sum = 0.0f;
             for (int x = 0; x < 8; ++x) {
                 sum += in[y * 8 + x] * kDct.m[u][x];
             }
@@ -138,7 +138,7 @@ void fdct8x8(const float in[64], float out[64]) noexcept {
     }
     for (int v = 0; v < 8; ++v) {
         for (int u = 0; u < 8; ++u) {
-            float sum = 0.0f;
+            f32 sum = 0.0f;
             for (int y = 0; y < 8; ++y) {
                 sum += kDct.m[v][y] * tmp[y * 8 + u];
             }
@@ -153,7 +153,7 @@ void fdct8x8(const float in[64], float out[64]) noexcept {
     return as<u8>(v);
 }
 
-[[nodiscard]] constexpr i16 round_to_i16(float x) noexcept {
+[[nodiscard]] constexpr i16 round_to_i16(f32 x) noexcept {
     return (x >= 0.0f) ? as<i16>(x + 0.5f) : as<i16>(x - 0.5f);
 }
 
@@ -288,12 +288,12 @@ private:
 };
 
 void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuffTable& ac_ht, const u16 q_table[64],
-                  int& last_dc, float out_spatial[64]) noexcept {
-    float freq[64]{};
+                  int& last_dc, f32 out_spatial[64]) noexcept {
+    f32 freq[64]{};
     const int dc_cat = reader.decode_symbol(dc_ht);
     const int dc_diff = reader.decode_value(dc_cat);
     last_dc += dc_diff;
-    freq[0] = as<float>(last_dc * as<int>(q_table[0]));
+    freq[0] = as<f32>(last_dc * as<int>(q_table[0]));
 
     int k = 1;
     while (k < 64) {
@@ -309,7 +309,7 @@ void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuf
         if (k >= 64) break;
         const int val = reader.decode_value(cat);
         const u8 zz = kZigzag[k];
-        freq[zz] = as<float>(val * as<int>(q_table[k]));
+        freq[zz] = as<f32>(val * as<int>(q_table[k]));
         ++k;
     }
     idct8x8(freq, out_spatial);
@@ -803,7 +803,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     const usize row_stride = as<usize>(width) * as<usize>(channels);
 
     // Per-MCU spatial component buffers (at most 4x4 blocks = 32x32 floats per component).
-    float mcu_planes[3][32 * 32]{};
+    f32 mcu_planes[3][32 * 32]{};
     int last_dc[3] = {0, 0, 0};
 
     jpeg_impl::JpegBitReader reader(data + sos_offset, len - sos_offset);
@@ -821,10 +821,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             for (u16 ci = 0; ci < channels; ++ci) {
                 const ComponentInfo& c = comps[ci];
                 const u32 cw = as<u32>(c.h_samp) * 8u;
-                float* plane = mcu_planes[ci];
+                f32* plane = mcu_planes[ci];
                 for (u32 v = 0; v < c.v_samp; ++v) {
                     for (u32 h = 0; h < c.h_samp; ++h) {
-                        float spatial[64];
+                        f32 spatial[64];
                         jpeg_impl::decode_block(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
                                                 q_tables[c.q_table_id], last_dc[ci], spatial);
                         const u32 br = v * 8u;
@@ -850,7 +850,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0);
                     for (u32 lx = 0; lx < lx_end; ++lx) {
                         const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
-                        const float y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.5f;
+                        const f32 y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.5f;
                         out_row[lx] = jpeg_impl::clamp_u8(as<int>(y_val));
                     }
                 }
@@ -868,9 +868,9 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                         const u32 cb_c = (comps[1].h_samp == max_h) ? lx : ((lx * comps[1].h_samp) / max_h);
                         const u32 cr_c = (comps[2].h_samp == max_h) ? lx : ((lx * comps[2].h_samp) / max_h);
 
-                        const float y_val = mcu_planes[0][y_r * y_w + y_c];
-                        const float cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
-                        const float cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
+                        const f32 y_val = mcu_planes[0][y_r * y_w + y_c];
+                        const f32 cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
+                        const f32 cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
 
                         const int r = as<int>(y_val + 1.402f * cr_val + 128.5f);
                         const int g = as<int>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
@@ -909,23 +909,23 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     } else if (q > 100) {
         q = 100;
     }
-    const float scale = (q < 50) ? (5000.0f / as<float>(q)) : (200.0f - 2.0f * as<float>(q));
+    const f32 scale = (q < 50) ? (5000.0f / as<f32>(q)) : (200.0f - 2.0f * as<f32>(q));
 
     u8 luma_q[64]{};
     u8 chroma_q[64]{};
-    float inv_luma_q[64]{};
-    float inv_chroma_q[64]{};
+    f32 inv_luma_q[64]{};
+    f32 inv_chroma_q[64]{};
     for (int i = 0; i < 64; ++i) {
-        int vl = as<int>((as<float>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
-        int vc = as<int>((as<float>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
+        int vl = as<int>((as<f32>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
+        int vc = as<int>((as<f32>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
         if (vl < 1) vl = 1;
         if (vl > 255) vl = 255;
         if (vc < 1) vc = 1;
         if (vc > 255) vc = 255;
         luma_q[i] = as<u8>(vl);
         chroma_q[i] = as<u8>(vc);
-        inv_luma_q[i] = 1.0f / as<float>(vl);
-        inv_chroma_q[i] = 1.0f / as<float>(vc);
+        inv_luma_q[i] = 1.0f / as<f32>(vl);
+        inv_chroma_q[i] = 1.0f / as<f32>(vc);
     }
 
     const usize approx_bytes =
@@ -1031,10 +1031,10 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     int last_dc_cb = 0;
     int last_dc_cr = 0;
 
-    float spatial_y[64];
-    float spatial_cb[64];
-    float spatial_cr[64];
-    float dct[64];
+    f32 spatial_y[64];
+    f32 spatial_cb[64];
+    f32 spatial_cr[64];
+    f32 dct[64];
     i16 quant_block[64];
 
     for (u32 my = 0; my < mcu_rows; ++my) {
@@ -1045,7 +1045,7 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
                     const u8* row = src_base + as<usize>(py) * src_stride;
                     for (u32 x = 0; x < 8u; ++x) {
                         const u32 px = (mx * 8u + x < view.width) ? (mx * 8u + x) : (view.width - 1u);
-                        spatial_y[y * 8u + x] = as<float>(row[px]) - 128.0f;
+                        spatial_y[y * 8u + x] = as<f32>(row[px]) - 128.0f;
                     }
                 }
 
@@ -1061,13 +1061,13 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
                     const u8* row = src_base + as<usize>(py) * src_stride;
                     for (u32 x = 0; x < 8u; ++x) {
                         const u32 px = (mx * 8u + x < view.width) ? (mx * 8u + x) : (view.width - 1u);
-                        const float r = as<float>(row[px * 3u + 0]);
-                        const float g = as<float>(row[px * 3u + 1]);
-                        const float b = as<float>(row[px * 3u + 2]);
+                        const f32 r = as<f32>(row[px * 3u + 0]);
+                        const f32 g = as<f32>(row[px * 3u + 1]);
+                        const f32 b = as<f32>(row[px * 3u + 2]);
 
-                        const float y_val = 0.29900f * r + 0.58700f * g + 0.11400f * b;
-                        const float cb_val = -0.16874f * r - 0.33126f * g + 0.50000f * b;
-                        const float cr_val = 0.50000f * r - 0.41869f * g - 0.08131f * b;
+                        const f32 y_val = 0.29900f * r + 0.58700f * g + 0.11400f * b;
+                        const f32 cb_val = -0.16874f * r - 0.33126f * g + 0.50000f * b;
+                        const f32 cr_val = 0.50000f * r - 0.41869f * g - 0.08131f * b;
 
                         spatial_y[y * 8u + x] = y_val - 128.0f;
                         spatial_cb[y * 8u + x] = cb_val;
