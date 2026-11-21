@@ -139,7 +139,7 @@ Image make_test_imagefile(u32 w, u32 h, u16 ch, SampleType st) {
     img.pixels = Array<u8>(n_samples * bps, u8{0});
     u8* p = img.pixels.data();
 
-    u32 rng = 0x9E3779B9u ^ (w * 131u + h * 17u + ch * 7u + static_cast<u32>(st));
+    u32 rng = 0x9E3779B9u ^ (w * 131u + h * 17u + ch * 7u + keel::as<u32>(st));
     for (usize i = 0; i < n_samples; ++i) {
         rng = rng * 1664525u + 1013904223u;
         switch (st) {
