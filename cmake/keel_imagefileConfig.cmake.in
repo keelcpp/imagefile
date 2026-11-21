@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(keel)
+find_dependency(keel_compress)
+
+include("${CMAKE_CURRENT_LIST_DIR}/keel_imagefileTargets.cmake")
+if(NOT TARGET keel::imagefile AND TARGET keel::keel_imagefile)
+    add_library(keel::imagefile ALIAS keel::keel_imagefile)
+endif()
+check_required_components(keel_imagefile)
