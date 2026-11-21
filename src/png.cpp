@@ -19,11 +19,11 @@ struct PngIhdr {
     u8 interlace = 0;
 };
 
-[[nodiscard]] constexpr int paeth_predictor(int a, int b, int c) noexcept {
-    const int p = a + b - c;
-    const int pa = (p >= a) ? (p - a) : (a - p);
-    const int pb = (p >= b) ? (p - b) : (b - p);
-    const int pc = (p >= c) ? (p - c) : (c - p);
+[[nodiscard]] constexpr i32 paeth_predictor(i32 a, i32 b, i32 c) noexcept {
+    const i32 p = a + b - c;
+    const i32 pa = (p >= a) ? (p - a) : (a - p);
+    const i32 pb = (p >= b) ? (p - b) : (b - p);
+    const i32 pc = (p >= c) ? (p - c) : (c - p);
     if (pa <= pb && pa <= pc) return a;
     if (pb <= pc) return b;
     return c;
@@ -133,17 +133,17 @@ struct PngIhdr {
                 break;
             case 3: // Average
                 for (usize x = 0; x < row_bytes; ++x) {
-                    const int left = (x >= safe_bpp) ? as<int>(curr[x - safe_bpp]) : 0;
-                    const int up = prev ? as<int>(prev[x]) : 0;
-                    curr[x] = as<u8>(as<int>(filt[x]) + ((left + up) >> 1));
+                    const i32 left = (x >= safe_bpp) ? as<i32>(curr[x - safe_bpp]) : 0;
+                    const i32 up = prev ? as<i32>(prev[x]) : 0;
+                    curr[x] = as<u8>(as<i32>(filt[x]) + ((left + up) >> 1));
                 }
                 break;
             case 4: // Paeth
                 for (usize x = 0; x < row_bytes; ++x) {
-                    const int left = (x >= safe_bpp) ? as<int>(curr[x - safe_bpp]) : 0;
-                    const int up = prev ? as<int>(prev[x]) : 0;
-                    const int up_left = (prev && x >= safe_bpp) ? as<int>(prev[x - safe_bpp]) : 0;
-                    curr[x] = as<u8>(as<int>(filt[x]) + paeth_predictor(left, up, up_left));
+                    const i32 left = (x >= safe_bpp) ? as<i32>(curr[x - safe_bpp]) : 0;
+                    const i32 up = prev ? as<i32>(prev[x]) : 0;
+                    const i32 up_left = (prev && x >= safe_bpp) ? as<i32>(prev[x - safe_bpp]) : 0;
+                    curr[x] = as<u8>(as<i32>(filt[x]) + paeth_predictor(left, up, up_left));
                 }
                 break;
             default:
@@ -318,11 +318,11 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     constexpr usize kY0[7] = {0, 0, 4, 0, 2, 0, 1};
     constexpr usize kDY[7] = {8, 8, 8, 4, 4, 2, 2};
 
-    const int num_passes = (ihdr.interlace == 1u) ? 7 : 1;
+    const i32 num_passes = (ihdr.interlace == 1u) ? 7 : 1;
     usize expected_raw_bytes = 0;
     usize max_pass_unfiltered = 0;
 
-    for (int p = 0; p < num_passes; ++p) {
+    for (i32 p = 0; p < num_passes; ++p) {
         const usize x0 = (num_passes == 1) ? 0u : kX0[p];
         const usize dx = (num_passes == 1) ? 1u : kDX[p];
         const usize y0 = (num_passes == 1) ? 0u : kY0[p];
@@ -375,7 +375,7 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     Array<u8> pass_unfiltered(max_pass_unfiltered, u8{0}, scratch.allocator());
     usize raw_pos = 0;
 
-    for (int p = 0; p < num_passes; ++p) {
+    for (i32 p = 0; p < num_passes; ++p) {
         const usize x0 = (num_passes == 1) ? 0u : kX0[p];
         const usize dx = (num_passes == 1) ? 1u : kDX[p];
         const usize y0 = (num_passes == 1) ? 0u : kY0[p];
@@ -481,7 +481,7 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
         }
     }
 
-    const int level = keel::clamp(opts.compression_level, 0, 9);
+    const i32 level = keel::clamp(opts.compression_level, 0, 9);
     Array<u8> compressed = keel::compress::zlib_compress(filtered, level, scratch.allocator());
 
     Array<u8> out(dst_alloc);

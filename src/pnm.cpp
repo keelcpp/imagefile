@@ -47,7 +47,7 @@ namespace pnm_impl {
 }
 
 struct PnmHeader {
-    int magic = 0; // 1..6
+    i32 magic = 0; // 1..6
     u32 width = 0;
     u32 height = 0;
     u32 maxval = 255;
@@ -65,7 +65,7 @@ struct PnmHeader {
     }
 
     PnmHeader hdr;
-    hdr.magic = as<int>(data[1] - '0');
+    hdr.magic = as<i32>(data[1] - '0');
     usize p = 2u;
 
     if (const ErrorCode ec = read_next_u32(data, len, p, hdr.width); ec != ErrorCode::Ok) return ec;
@@ -106,7 +106,7 @@ struct PnmHeader {
 
 void push_u32_ascii(Array<u8>& buf, u32 v) {
     u8 digits[12];
-    int n = 0;
+    i32 n = 0;
     if (v == 0) {
         buf.push_back('0');
         return;

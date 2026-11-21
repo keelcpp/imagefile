@@ -126,7 +126,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::EndOfFile;
     }
 
-    const int min_code_size = as<int>(data[pos++]);
+    const i32 min_code_size = as<i32>(data[pos++]);
     if (min_code_size < 2 || min_code_size > 8) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
@@ -152,10 +152,10 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::EndOfFile;
     }
 
-    const int clear_code = 1 << min_code_size;
-    const int end_code = clear_code + 1;
-    int code_size = min_code_size + 1;
-    int next_code = end_code + 1;
+    const i32 clear_code = 1 << min_code_size;
+    const i32 end_code = clear_code + 1;
+    i32 code_size = min_code_size + 1;
+    i32 next_code = end_code + 1;
 
     i16* prefix = scratch.arena().alloc_array<i16>(4096);
     u8* suffix = scratch.arena().alloc_array<u8>(4096);
@@ -165,7 +165,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     auto reset_table = [&]() noexcept {
         code_size = min_code_size + 1;
         next_code = end_code + 1;
-        for (int i = 0; i < clear_code; ++i) {
+        for (i32 i = 0; i < clear_code; ++i) {
             prefix[i] = -1;
             suffix[i] = as<u8>(i);
             first_char[i] = as<u8>(i);
@@ -179,11 +179,11 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     const u8* comp_ptr = compressed.data();
     const usize total_bits = compressed.size() * 8u;
     usize bit_pos = 0;
-    int prev_code = -1;
+    i32 prev_code = -1;
 
     while (bit_pos + as<usize>(code_size) <= total_bits && out_pos < npix) {
-        int code = 0;
-        for (int b = 0; b < code_size; ++b) {
+        i32 code = 0;
+        for (i32 b = 0; b < code_size; ++b) {
             const usize bp = bit_pos + as<usize>(b);
             if (((comp_ptr[bp >> 3] >> (bp & 7u)) & 1u) != 0u) {
                 code |= (1 << b);
@@ -200,7 +200,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             break;
         }
 
-        int cur = code;
+        i32 cur = code;
         usize sp = 0;
         if (code == next_code && prev_code >= 0) {
             stack[sp++] = first_char[prev_code];
@@ -249,7 +249,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         constexpr usize kStart[4] = {0, 4, 2, 1};
         constexpr usize kStep[4] = {8, 8, 4, 2};
         usize src_row = 0;
-        for (int pass = 0; pass < 4; ++pass) {
+        for (i32 pass = 0; pass < 4; ++pass) {
             for (usize r = kStart[pass]; r < h; r += kStep[pass]) {
                 if (src_row < h) {
                     mem_copy(img.pixels.data() + r * w, decoded_indices.data() + src_row * w, w);

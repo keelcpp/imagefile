@@ -444,7 +444,7 @@ struct TiffIfdInfo {
             out.append(ArrayRef<u8>(src + i, count));
             i += count;
         } else {
-            const usize count = as<usize>(-as<int>(n)) + 1u;
+            const usize count = as<usize>(-as<i32>(n)) + 1u;
             if (i >= src_len) [[unlikely]] {
                 return ErrorCode::EndOfFile;
             }
@@ -479,7 +479,7 @@ struct TiffIfdInfo {
     }
 
     u32 next_code = 258u;
-    int code_width = 9;
+    i32 code_width = 9;
     u32 prev_code = kNoCode;
 
     Array<u8> out(alloc);
@@ -490,9 +490,9 @@ struct TiffIfdInfo {
 
     while (bit_pos + as<usize>(code_width) <= total_bits) {
         u32 code = 0;
-        for (int i = 0; i < code_width; ++i) {
+        for (i32 i = 0; i < code_width; ++i) {
             const usize byte_pos = bit_pos >> 3;
-            const int bit_off = 7 - as<int>(bit_pos & 7u);
+            const i32 bit_off = 7 - as<i32>(bit_pos & 7u);
             code = (code << 1) | ((src[byte_pos] >> bit_off) & 1u);
             ++bit_pos;
         }
@@ -669,7 +669,7 @@ void unpack_subbyte_row(const u8* src, u8* dst, usize width, u16 bits_per_sample
     for (usize x = 0; x < width; ++x) {
         const usize bit_idx = x * bits_per_sample;
         const usize byte_idx = bit_idx >> 3;
-        const int shift = as<int>(8u - bits_per_sample - (bit_idx & 7u));
+        const i32 shift = as<i32>(8u - bits_per_sample - (bit_idx & 7u));
         dst[x] = as<u8>((src[byte_idx] >> shift) & mask);
     }
 }
@@ -706,7 +706,7 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
         }
         const usize run_len = run_end - i;
         if (run_len >= 3u) {
-            out.push_back(as<u8>(as<i8>(-(as<int>(run_len) - 1))));
+            out.push_back(as<u8>(as<i8>(-(as<i32>(run_len) - 1))));
             out.push_back(src[i]);
             i = run_end;
             continue;
@@ -743,8 +743,8 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
     out.reserve((n / 2u) + 64u);
 
     u32 bit_buf = 0;
-    int bit_count = 0;
-    int code_width = 9;
+    i32 bit_count = 0;
+    i32 code_width = 9;
     u32 next_code = 258u;
 
     auto write_bits = [&](u32 code) {
@@ -928,7 +928,7 @@ struct RawIfdEntry {
         return make_u32_entry(tag, as<u32>(val));
     }
     RawIfdEntry e{.tag = tag, .type = 16, .count = 1};
-    for (int i = 0; i < 8; ++i) {
+    for (i32 i = 0; i < 8; ++i) {
         e.inline_bytes[i] = as<u8>((val >> (8 * i)) & 0xFFu);
     }
     return e;
@@ -1035,7 +1035,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
                 RawIfdEntry ne{.tag = tag, .type = 16, .count = count};
                 if (offs.size() == 1) {
                     const u64 shifted = offs[0] + kDelta;
-                    for (int b = 0; b < 8; ++b) {
+                    for (i32 b = 0; b < 8; ++b) {
                         ne.inline_bytes[b] = as<u8>((shifted >> (8 * b)) & 0xFFu);
                     }
                 } else if (offs.size() > 1) {

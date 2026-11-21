@@ -63,9 +63,9 @@ struct DctBasis {
     f32 m[8][8]; // m[u][x] = 0.5 * c(u) * cos((2*x + 1) * u * pi / 16)
 };
 
-consteval f64 cos_pi_over_16(int k_raw) {
+consteval f64 cos_pi_over_16(i32 k_raw) {
     constexpr f64 kPi = 3.14159265358979323846264338327950288;
-    int k = k_raw % 32;
+    i32 k = k_raw % 32;
     if (k < 0) k += 32;
     if (k > 16) k = 32 - k;
     if (k == 0) return 1.0;
@@ -80,7 +80,7 @@ consteval f64 cos_pi_over_16(int k_raw) {
     const f64 t2 = theta * theta;
     f64 term = 1.0;
     f64 sum = 1.0;
-    for (int n = 1; n <= 12; ++n) {
+    for (i32 n = 1; n <= 12; ++n) {
         term *= -t2 / as<f64>((2 * n - 1) * (2 * n));
         sum += term;
     }
@@ -90,9 +90,9 @@ consteval f64 cos_pi_over_16(int k_raw) {
 consteval DctBasis build_dct_basis() {
     DctBasis b{};
     constexpr f64 kInvSqrt2 = 0.707106781186547524400844362104849039;
-    for (int u = 0; u < 8; ++u) {
+    for (i32 u = 0; u < 8; ++u) {
         const f64 cu = (u == 0) ? kInvSqrt2 : 1.0;
-        for (int x = 0; x < 8; ++x) {
+        for (i32 x = 0; x < 8; ++x) {
             b.m[u][x] = as<f32>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
         }
     }
@@ -104,19 +104,19 @@ constexpr DctBasis kDct = build_dct_basis();
 // Separable 2D IDCT: out = M^T * in * M
 void idct8x8(const f32 in[64], f32 out[64]) noexcept {
     f32 tmp[64];
-    for (int v = 0; v < 8; ++v) {
-        for (int x = 0; x < 8; ++x) {
+    for (i32 v = 0; v < 8; ++v) {
+        for (i32 x = 0; x < 8; ++x) {
             f32 sum = 0.0f;
-            for (int u = 0; u < 8; ++u) {
+            for (i32 u = 0; u < 8; ++u) {
                 sum += in[v * 8 + u] * kDct.m[u][x];
             }
             tmp[v * 8 + x] = sum;
         }
     }
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
+    for (i32 y = 0; y < 8; ++y) {
+        for (i32 x = 0; x < 8; ++x) {
             f32 sum = 0.0f;
-            for (int v = 0; v < 8; ++v) {
+            for (i32 v = 0; v < 8; ++v) {
                 sum += kDct.m[v][y] * tmp[v * 8 + x];
             }
             out[y * 8 + x] = sum;
@@ -127,19 +127,19 @@ void idct8x8(const f32 in[64], f32 out[64]) noexcept {
 // Separable 2D FDCT: out = M * in * M^T
 void fdct8x8(const f32 in[64], f32 out[64]) noexcept {
     f32 tmp[64];
-    for (int y = 0; y < 8; ++y) {
-        for (int u = 0; u < 8; ++u) {
+    for (i32 y = 0; y < 8; ++y) {
+        for (i32 u = 0; u < 8; ++u) {
             f32 sum = 0.0f;
-            for (int x = 0; x < 8; ++x) {
+            for (i32 x = 0; x < 8; ++x) {
                 sum += in[y * 8 + x] * kDct.m[u][x];
             }
             tmp[y * 8 + u] = sum;
         }
     }
-    for (int v = 0; v < 8; ++v) {
-        for (int u = 0; u < 8; ++u) {
+    for (i32 v = 0; v < 8; ++v) {
+        for (i32 u = 0; u < 8; ++u) {
             f32 sum = 0.0f;
-            for (int y = 0; y < 8; ++y) {
+            for (i32 y = 0; y < 8; ++y) {
                 sum += kDct.m[v][y] * tmp[y * 8 + u];
             }
             out[v * 8 + u] = sum;
@@ -147,7 +147,7 @@ void fdct8x8(const f32 in[64], f32 out[64]) noexcept {
     }
 }
 
-[[nodiscard]] constexpr u8 clamp_u8(int v) noexcept {
+[[nodiscard]] constexpr u8 clamp_u8(i32 v) noexcept {
     if (v < 0) return 0;
     if (v > 255) return 255;
     return as<u8>(v);
@@ -173,7 +173,7 @@ struct DecHuffTable {
     u16 num_values = 0;
     u32 min_code[17]{};
     u32 max_code[17]{};
-    int val_ptr[17]{};
+    i32 val_ptr[17]{};
     bool populated = false;
 
     void set_default(const u8 default_counts[16], const u8* default_vals, u16 nvals) noexcept {
@@ -185,8 +185,8 @@ struct DecHuffTable {
 
     [[nodiscard]] bool build() noexcept {
         u32 code = 0;
-        int ptr = 0;
-        for (int len = 1; len <= 16; ++len) {
+        i32 ptr = 0;
+        for (i32 len = 1; len <= 16; ++len) {
             val_ptr[len] = ptr;
             const u32 cnt = counts[len - 1];
             if (cnt > 0) {
@@ -196,7 +196,7 @@ struct DecHuffTable {
                 min_code[len] = code;
                 max_code[len] = code + cnt - 1u;
                 code += cnt;
-                ptr += as<int>(cnt);
+                ptr += as<i32>(cnt);
             } else {
                 min_code[len] = 0xFFFFFFFFu;
                 max_code[len] = 0;
@@ -216,7 +216,7 @@ public:
         m_bit_count = 0;
     }
 
-    [[nodiscard]] u32 get_bits(int n) noexcept {
+    [[nodiscard]] u32 get_bits(i32 n) noexcept {
         if (n <= 0) return 0;
         while (m_bit_count < n) {
             if (m_pos >= m_len) {
@@ -254,13 +254,13 @@ public:
         return val;
     }
 
-    [[nodiscard]] int decode_symbol(const DecHuffTable& ht) noexcept {
+    [[nodiscard]] i32 decode_symbol(const DecHuffTable& ht) noexcept {
         u32 code = 0;
-        for (int len = 1; len <= 16; ++len) {
+        for (i32 len = 1; len <= 16; ++len) {
             code = (code << 1) | get_bits(1);
             if (code <= ht.max_code[len] && code >= ht.min_code[len]) {
-                const int idx = ht.val_ptr[len] + as<int>(code - ht.min_code[len]);
-                if (idx >= 0 && idx < as<int>(ht.num_values)) {
+                const i32 idx = ht.val_ptr[len] + as<i32>(code - ht.min_code[len]);
+                if (idx >= 0 && idx < as<i32>(ht.num_values)) {
                     return ht.values[idx];
                 }
                 return 0;
@@ -269,14 +269,14 @@ public:
         return 0;
     }
 
-    [[nodiscard]] int decode_value(int cat) noexcept {
+    [[nodiscard]] i32 decode_value(i32 cat) noexcept {
         if (cat <= 0) return 0;
         if (cat > 15) cat = 15;
         const u32 bits = get_bits(cat);
         if (bits < (1u << (cat - 1))) {
-            return as<int>(bits) - ((1 << cat) - 1);
+            return as<i32>(bits) - ((1 << cat) - 1);
         }
-        return as<int>(bits);
+        return as<i32>(bits);
     }
 
 private:
@@ -284,32 +284,32 @@ private:
     usize m_len = 0;
     usize m_pos = 0;
     u64 m_bit_buf = 0;
-    int m_bit_count = 0;
+    i32 m_bit_count = 0;
 };
 
 void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuffTable& ac_ht, const u16 q_table[64],
-                  int& last_dc, f32 out_spatial[64]) noexcept {
+                  i32& last_dc, f32 out_spatial[64]) noexcept {
     f32 freq[64]{};
-    const int dc_cat = reader.decode_symbol(dc_ht);
-    const int dc_diff = reader.decode_value(dc_cat);
+    const i32 dc_cat = reader.decode_symbol(dc_ht);
+    const i32 dc_diff = reader.decode_value(dc_cat);
     last_dc += dc_diff;
-    freq[0] = as<f32>(last_dc * as<int>(q_table[0]));
+    freq[0] = as<f32>(last_dc * as<i32>(q_table[0]));
 
-    int k = 1;
+    i32 k = 1;
     while (k < 64) {
-        const int sym = reader.decode_symbol(ac_ht);
+        const i32 sym = reader.decode_symbol(ac_ht);
         if (sym == 0x00) break; // EOB
         if (sym == 0xF0) {      // ZRL (16 zeros)
             k += 16;
             continue;
         }
-        const int run = (sym >> 4) & 0x0F;
-        const int cat = sym & 0x0F;
+        const i32 run = (sym >> 4) & 0x0F;
+        const i32 cat = sym & 0x0F;
         k += run;
         if (k >= 64) break;
-        const int val = reader.decode_value(cat);
+        const i32 val = reader.decode_value(cat);
         const u8 zz = kZigzag[k];
-        freq[zz] = as<f32>(val * as<int>(q_table[k]));
+        freq[zz] = as<f32>(val * as<i32>(q_table[k]));
         ++k;
     }
     idct8x8(freq, out_spatial);
@@ -328,8 +328,8 @@ struct HuffCodeTable {
     HuffCodeTable table{};
     u16 code = 0;
     usize val_idx = 0;
-    for (int len = 1; len <= 16; ++len) {
-        for (int i = 0; i < bits[len - 1]; ++i) {
+    for (i32 len = 1; len <= 16; ++len) {
+        for (i32 i = 0; i < bits[len - 1]; ++i) {
             if (val_idx < num_vals) {
                 const u8 val = values[val_idx++];
                 table.codes[val] = HuffCode{.code = code, .len = as<u8>(len)};
@@ -350,7 +350,7 @@ class JpegBitWriter {
 public:
     explicit JpegBitWriter(Array<u8>& out) noexcept : m_out(out) {}
 
-    void write_bits(u32 val, int n) {
+    void write_bits(u32 val, i32 n) {
         if (n <= 0) return;
         m_bit_buf |= (as<u64>(val) & ((u64{1} << n) - 1u)) << (64 - m_bit_count - n);
         m_bit_count += n;
@@ -382,12 +382,12 @@ public:
 private:
     Array<u8>& m_out;
     u64 m_bit_buf = 0;
-    int m_bit_count = 0;
+    i32 m_bit_count = 0;
 };
 
-[[nodiscard]] constexpr int get_category(int val) noexcept {
-    int abs_val = (val < 0) ? -val : val;
-    int cat = 0;
+[[nodiscard]] constexpr i32 get_category(i32 val) noexcept {
+    i32 abs_val = (val < 0) ? -val : val;
+    i32 cat = 0;
     while (abs_val > 0) {
         ++cat;
         abs_val >>= 1;
@@ -395,27 +395,27 @@ private:
     return cat;
 }
 
-void write_category_bits(JpegBitWriter& writer, int val, int cat) {
+void write_category_bits(JpegBitWriter& writer, i32 val, i32 cat) {
     if (cat <= 0) return;
-    int bits = val;
+    i32 bits = val;
     if (val < 0) {
         bits = val + (1 << cat) - 1;
     }
     writer.write_bits(as<u32>(bits), cat);
 }
 
-void encode_block(JpegBitWriter& writer, const i16 block[64], int& last_dc, const HuffCodeTable& dc_codes,
+void encode_block(JpegBitWriter& writer, const i16 block[64], i32& last_dc, const HuffCodeTable& dc_codes,
                   const HuffCodeTable& ac_codes) {
-    const int dc_diff = as<int>(block[0]) - last_dc;
+    const i32 dc_diff = as<i32>(block[0]) - last_dc;
     last_dc = block[0];
 
-    const int dc_cat = get_category(dc_diff);
+    const i32 dc_cat = get_category(dc_diff);
     writer.write_bits(dc_codes.codes[dc_cat].code, dc_codes.codes[dc_cat].len);
     write_category_bits(writer, dc_diff, dc_cat);
 
-    int r = 0;
-    for (int k = 1; k < 64; ++k) {
-        const int ac = block[kZigzag[k]];
+    i32 r = 0;
+    for (i32 k = 1; k < 64; ++k) {
+        const i32 ac = block[kZigzag[k]];
         if (ac == 0) {
             ++r;
         } else {
@@ -423,7 +423,7 @@ void encode_block(JpegBitWriter& writer, const i16 block[64], int& last_dc, cons
                 writer.write_bits(ac_codes.codes[0xF0].code, ac_codes.codes[0xF0].len);
                 r -= 16;
             }
-            const int ac_cat = get_category(ac);
+            const i32 ac_cat = get_category(ac);
             const u8 sym = as<u8>((r << 4) | ac_cat);
             writer.write_bits(ac_codes.codes[sym].code, ac_codes.codes[sym].len);
             write_category_bits(writer, ac, ac_cat);
@@ -675,7 +675,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     if (q_off + 128 > payload_len) [[unlikely]] {
                         return ErrorCode::InvalidData;
                     }
-                    for (int i = 0; i < 64; ++i) {
+                    for (i32 i = 0; i < 64; ++i) {
                         q_tables[table_id][i] = detail::read_u16_be(seg + q_off + i * 2);
                     }
                     has_q_table[table_id] = true;
@@ -684,7 +684,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     if (q_off + 64 > payload_len) [[unlikely]] {
                         return ErrorCode::InvalidData;
                     }
-                    for (int i = 0; i < 64; ++i) {
+                    for (i32 i = 0; i < 64; ++i) {
                         q_tables[table_id][i] = seg[q_off + i];
                     }
                     has_q_table[table_id] = true;
@@ -707,7 +707,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 mem_copy(ht.counts, seg + h_off, 16);
                 h_off += 16;
                 usize num_codes = 0;
-                for (int i = 0; i < 16; ++i) {
+                for (i32 i = 0; i < 16; ++i) {
                     num_codes += ht.counts[i];
                 }
                 if (num_codes > 256 || h_off + num_codes > payload_len) [[unlikely]] {
@@ -737,13 +737,13 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     // Populate default quantization & Huffman tables if omitted by abbreviated streams.
     if (!has_q_table[0]) {
-        for (int k = 0; k < 64; ++k) {
+        for (i32 k = 0; k < 64; ++k) {
             q_tables[0][k] = jpeg_impl::kStdLumaQ[jpeg_impl::kZigzag[k]];
         }
         has_q_table[0] = true;
     }
     if (!has_q_table[1]) {
-        for (int k = 0; k < 64; ++k) {
+        for (i32 k = 0; k < 64; ++k) {
             q_tables[1][k] = jpeg_impl::kStdChromaQ[jpeg_impl::kZigzag[k]];
         }
         has_q_table[1] = true;
@@ -766,7 +766,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     if (!ac_huff[1].populated) {
         ac_huff[1].set_default(jpeg_impl::kAcBitsChroma, jpeg_impl::kAcValChroma, sizeof(jpeg_impl::kAcValChroma));
     }
-    for (int i = 0; i < 4; ++i) {
+    for (i32 i = 0; i < 4; ++i) {
         if (dc_huff[i].populated && !dc_huff[i].build()) [[unlikely]] {
             return ErrorCode::InvalidData;
         }
@@ -804,7 +804,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     // Per-MCU spatial component buffers (at most 4x4 blocks = 32x32 floats per component).
     f32 mcu_planes[3][32 * 32]{};
-    int last_dc[3] = {0, 0, 0};
+    i32 last_dc[3] = {0, 0, 0};
 
     jpeg_impl::JpegBitReader reader(data + sos_offset, len - sos_offset);
     usize mcu_count = 0;
@@ -851,7 +851,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     for (u32 lx = 0; lx < lx_end; ++lx) {
                         const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
                         const f32 y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.5f;
-                        out_row[lx] = jpeg_impl::clamp_u8(as<int>(y_val));
+                        out_row[lx] = jpeg_impl::clamp_u8(as<i32>(y_val));
                     }
                 }
             } else {
@@ -872,9 +872,9 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                         const f32 cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
                         const f32 cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
 
-                        const int r = as<int>(y_val + 1.402f * cr_val + 128.5f);
-                        const int g = as<int>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
-                        const int b = as<int>(y_val + 1.772f * cb_val + 128.5f);
+                        const i32 r = as<i32>(y_val + 1.402f * cr_val + 128.5f);
+                        const i32 g = as<i32>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
+                        const i32 b = as<i32>(y_val + 1.772f * cb_val + 128.5f);
 
                         out_row[lx * 3u + 0] = jpeg_impl::clamp_u8(r);
                         out_row[lx * 3u + 1] = jpeg_impl::clamp_u8(g);
@@ -903,7 +903,7 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
         return ErrorCode::OutOfRange;
     }
 
-    int q = opts.quality;
+    i32 q = opts.quality;
     if (q < 1) {
         q = 1;
     } else if (q > 100) {
@@ -915,9 +915,9 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     u8 chroma_q[64]{};
     f32 inv_luma_q[64]{};
     f32 inv_chroma_q[64]{};
-    for (int i = 0; i < 64; ++i) {
-        int vl = as<int>((as<f32>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
-        int vc = as<int>((as<f32>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
+    for (i32 i = 0; i < 64; ++i) {
+        i32 vl = as<i32>((as<f32>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
+        i32 vc = as<i32>((as<f32>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
         if (vl < 1) vl = 1;
         if (vl > 255) vl = 255;
         if (vc < 1) vc = 1;
@@ -949,12 +949,12 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     out.push_back(0xDBu);
     detail::push_u16_be(out, as<u16>((view.channels == 1) ? 67u : 132u));
     out.push_back(0x00u); // Table 0 (8-bit)
-    for (int k = 0; k < 64; ++k) {
+    for (i32 k = 0; k < 64; ++k) {
         out.push_back(luma_q[jpeg_impl::kZigzag[k]]);
     }
     if (view.channels == 3) {
         out.push_back(0x01u); // Table 1 (8-bit)
-        for (int k = 0; k < 64; ++k) {
+        for (i32 k = 0; k < 64; ++k) {
             out.push_back(chroma_q[jpeg_impl::kZigzag[k]]);
         }
     }
@@ -1027,9 +1027,9 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     const u8* src_base = view.pixels.data();
     const usize src_stride = vv.stride_bytes;
 
-    int last_dc_y = 0;
-    int last_dc_cb = 0;
-    int last_dc_cr = 0;
+    i32 last_dc_y = 0;
+    i32 last_dc_cb = 0;
+    i32 last_dc_cr = 0;
 
     f32 spatial_y[64];
     f32 spatial_cb[64];
@@ -1050,7 +1050,7 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
                 }
 
                 jpeg_impl::fdct8x8(spatial_y, dct);
-                for (int i = 0; i < 64; ++i) {
+                for (i32 i = 0; i < 64; ++i) {
                     quant_block[i] = jpeg_impl::round_to_i16(dct[i] * inv_luma_q[i]);
                 }
                 jpeg_impl::encode_block(bit_writer, quant_block, last_dc_y, jpeg_impl::kEncDcLuma,
@@ -1076,21 +1076,21 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
                 }
 
                 jpeg_impl::fdct8x8(spatial_y, dct);
-                for (int i = 0; i < 64; ++i) {
+                for (i32 i = 0; i < 64; ++i) {
                     quant_block[i] = jpeg_impl::round_to_i16(dct[i] * inv_luma_q[i]);
                 }
                 jpeg_impl::encode_block(bit_writer, quant_block, last_dc_y, jpeg_impl::kEncDcLuma,
                                         jpeg_impl::kEncAcLuma);
 
                 jpeg_impl::fdct8x8(spatial_cb, dct);
-                for (int i = 0; i < 64; ++i) {
+                for (i32 i = 0; i < 64; ++i) {
                     quant_block[i] = jpeg_impl::round_to_i16(dct[i] * inv_chroma_q[i]);
                 }
                 jpeg_impl::encode_block(bit_writer, quant_block, last_dc_cb, jpeg_impl::kEncDcChroma,
                                         jpeg_impl::kEncAcChroma);
 
                 jpeg_impl::fdct8x8(spatial_cr, dct);
-                for (int i = 0; i < 64; ++i) {
+                for (i32 i = 0; i < 64; ++i) {
                     quant_block[i] = jpeg_impl::round_to_i16(dct[i] * inv_chroma_q[i]);
                 }
                 jpeg_impl::encode_block(bit_writer, quant_block, last_dc_cr, jpeg_impl::kEncDcChroma,

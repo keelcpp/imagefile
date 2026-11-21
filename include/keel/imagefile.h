@@ -185,13 +185,13 @@ enum class TiffCompression : u8 {
 };
 
 struct PngEncodeOptions {
-    int compression_level = 6;
+    i32 compression_level = 6;
     Allocator* allocator = nullptr;
     ArrayRef<u16> palette{}; // Optional RGB palette [R0, G0, B0, ...] (0..255) for 1-channel U8 indexed PNG
 };
 
 struct JpegEncodeOptions {
-    int quality = 90;
+    i32 quality = 90;
     Allocator* allocator = nullptr;
 };
 

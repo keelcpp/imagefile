@@ -19,7 +19,7 @@ if(NOT TARGET keel::keel)
     FetchContent_Declare(
         keel
         GIT_REPOSITORY https://github.com/keelcpp/keel.git
-        GIT_TAG        f373b237bc937b21c979bee017182dcc05ff6902
+        GIT_TAG        869a5c07a5d77341e5f6acbac5f8e024b274ea08
     )
     FetchContent_MakeAvailable(keel)
 endif()
@@ -92,6 +92,18 @@ else()
     if(KEEL_IMAGEFILE_NO_EXCEPTIONS_RTTI)
         target_compile_options(keel_imagefile PUBLIC -fno-exceptions -fno-rtti)
     endif()
+endif()
+
+if(COMMAND keel_enforce_guidelines)
+    keel_enforce_guidelines(keel_imagefile
+        SCOPE ALL
+        BAN_RAW_INTS ALL
+        BAN_RAW_FLOATS ALL
+        HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        STANDALONE_HEADERS ${KEEL_IMAGEFILE_BUILD_TESTS}
+        TEST_NAME test_guidelines_headers
+        WARNINGS OFF
+    )
 endif()
 
 include(CMakePackageConfigHelpers)
