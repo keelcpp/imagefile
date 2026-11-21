@@ -76,12 +76,12 @@ consteval double cos_pi_over_16(int k_raw) {
         k = 16 - k;
         sign = -1.0;
     }
-    const double theta = static_cast<double>(k) * (kPi / 16.0);
+    const double theta = as<double>(k) * (kPi / 16.0);
     const double t2 = theta * theta;
     double term = 1.0;
     double sum = 1.0;
     for (int n = 1; n <= 12; ++n) {
-        term *= -t2 / static_cast<double>((2 * n - 1) * (2 * n));
+        term *= -t2 / as<double>((2 * n - 1) * (2 * n));
         sum += term;
     }
     return sign * sum;
@@ -93,7 +93,7 @@ consteval DctBasis build_dct_basis() {
     for (int u = 0; u < 8; ++u) {
         const double cu = (u == 0) ? kInvSqrt2 : 1.0;
         for (int x = 0; x < 8; ++x) {
-            b.m[u][x] = static_cast<float>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
+            b.m[u][x] = as<float>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
         }
     }
     return b;
@@ -150,11 +150,11 @@ void fdct8x8(const float in[64], float out[64]) noexcept {
 [[nodiscard]] constexpr u8 clamp_u8(int v) noexcept {
     if (v < 0) return 0;
     if (v > 255) return 255;
-    return static_cast<u8>(v);
+    return as<u8>(v);
 }
 
 [[nodiscard]] constexpr i16 round_to_i16(float x) noexcept {
-    return (x >= 0.0f) ? static_cast<i16>(x + 0.5f) : static_cast<i16>(x - 0.5f);
+    return (x >= 0.0f) ? as<i16>(x + 0.5f) : as<i16>(x - 0.5f);
 }
 
 [[nodiscard]] constexpr bool is_sof_marker(u8 m) noexcept { return m == 0xC0u || m == 0xC1u || m == 0xC2u; }
@@ -196,14 +196,14 @@ struct DecHuffTable {
                 min_code[len] = code;
                 max_code[len] = code + cnt - 1u;
                 code += cnt;
-                ptr += static_cast<int>(cnt);
+                ptr += as<int>(cnt);
             } else {
                 min_code[len] = 0xFFFFFFFFu;
                 max_code[len] = 0;
             }
             code <<= 1;
         }
-        return static_cast<u16>(ptr) <= num_values;
+        return as<u16>(ptr) <= num_values;
     }
 };
 
@@ -246,10 +246,10 @@ public:
                     }
                 }
             }
-            m_bit_buf = (m_bit_buf << 8) | static_cast<u64>(b);
+            m_bit_buf = (m_bit_buf << 8) | as<u64>(b);
             m_bit_count += 8;
         }
-        const u32 val = static_cast<u32>((m_bit_buf >> (m_bit_count - n)) & ((u64{1} << n) - 1u));
+        const u32 val = as<u32>((m_bit_buf >> (m_bit_count - n)) & ((u64{1} << n) - 1u));
         m_bit_count -= n;
         return val;
     }
@@ -259,8 +259,8 @@ public:
         for (int len = 1; len <= 16; ++len) {
             code = (code << 1) | get_bits(1);
             if (code <= ht.max_code[len] && code >= ht.min_code[len]) {
-                const int idx = ht.val_ptr[len] + static_cast<int>(code - ht.min_code[len]);
-                if (idx >= 0 && idx < static_cast<int>(ht.num_values)) {
+                const int idx = ht.val_ptr[len] + as<int>(code - ht.min_code[len]);
+                if (idx >= 0 && idx < as<int>(ht.num_values)) {
                     return ht.values[idx];
                 }
                 return 0;
@@ -274,9 +274,9 @@ public:
         if (cat > 15) cat = 15;
         const u32 bits = get_bits(cat);
         if (bits < (1u << (cat - 1))) {
-            return static_cast<int>(bits) - ((1 << cat) - 1);
+            return as<int>(bits) - ((1 << cat) - 1);
         }
-        return static_cast<int>(bits);
+        return as<int>(bits);
     }
 
 private:
@@ -293,7 +293,7 @@ void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuf
     const int dc_cat = reader.decode_symbol(dc_ht);
     const int dc_diff = reader.decode_value(dc_cat);
     last_dc += dc_diff;
-    freq[0] = static_cast<float>(last_dc * static_cast<int>(q_table[0]));
+    freq[0] = as<float>(last_dc * as<int>(q_table[0]));
 
     int k = 1;
     while (k < 64) {
@@ -309,7 +309,7 @@ void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuf
         if (k >= 64) break;
         const int val = reader.decode_value(cat);
         const u8 zz = kZigzag[k];
-        freq[zz] = static_cast<float>(val * static_cast<int>(q_table[k]));
+        freq[zz] = as<float>(val * as<int>(q_table[k]));
         ++k;
     }
     idct8x8(freq, out_spatial);
@@ -332,11 +332,11 @@ struct HuffCodeTable {
         for (int i = 0; i < bits[len - 1]; ++i) {
             if (val_idx < num_vals) {
                 const u8 val = values[val_idx++];
-                table.codes[val] = HuffCode{.code = code, .len = static_cast<u8>(len)};
+                table.codes[val] = HuffCode{.code = code, .len = as<u8>(len)};
                 ++code;
             }
         }
-        code = static_cast<u16>(code << 1);
+        code = as<u16>(code << 1);
     }
     return table;
 }
@@ -352,10 +352,10 @@ public:
 
     void write_bits(u32 val, int n) {
         if (n <= 0) return;
-        m_bit_buf |= (static_cast<u64>(val) & ((u64{1} << n) - 1u)) << (64 - m_bit_count - n);
+        m_bit_buf |= (as<u64>(val) & ((u64{1} << n) - 1u)) << (64 - m_bit_count - n);
         m_bit_count += n;
         while (m_bit_count >= 8) {
-            const u8 byte = static_cast<u8>((m_bit_buf >> 56) & 0xFFu);
+            const u8 byte = as<u8>((m_bit_buf >> 56) & 0xFFu);
             m_out.push_back(byte);
             if (byte == 0xFFu) {
                 m_out.push_back(0x00u);
@@ -369,7 +369,7 @@ public:
         if (m_bit_count > 0) {
             // Pad trailing bits with 1s per ITU-T T.81 F.1.2.3.
             const u64 pad_mask = ((u64{1} << (8 - m_bit_count)) - 1u) << (56);
-            const u8 byte = static_cast<u8>(((m_bit_buf | pad_mask) >> 56) & 0xFFu);
+            const u8 byte = as<u8>(((m_bit_buf | pad_mask) >> 56) & 0xFFu);
             m_out.push_back(byte);
             if (byte == 0xFFu) {
                 m_out.push_back(0x00u);
@@ -401,12 +401,12 @@ void write_category_bits(JpegBitWriter& writer, int val, int cat) {
     if (val < 0) {
         bits = val + (1 << cat) - 1;
     }
-    writer.write_bits(static_cast<u32>(bits), cat);
+    writer.write_bits(as<u32>(bits), cat);
 }
 
 void encode_block(JpegBitWriter& writer, const i16 block[64], int& last_dc, const HuffCodeTable& dc_codes,
                   const HuffCodeTable& ac_codes) {
-    const int dc_diff = static_cast<int>(block[0]) - last_dc;
+    const int dc_diff = as<int>(block[0]) - last_dc;
     last_dc = block[0];
 
     const int dc_cat = get_category(dc_diff);
@@ -424,7 +424,7 @@ void encode_block(JpegBitWriter& writer, const i16 block[64], int& last_dc, cons
                 r -= 16;
             }
             const int ac_cat = get_category(ac);
-            const u8 sym = static_cast<u8>((r << 4) | ac_cat);
+            const u8 sym = as<u8>((r << 4) | ac_cat);
             writer.write_bits(ac_codes.codes[sym].code, ac_codes.codes[sym].len);
             write_category_bits(writer, ac, ac_cat);
             r = 0;
@@ -589,7 +589,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         }
 
         const u8* seg = data + p + 2;
-        const usize payload_len = static_cast<usize>(seg_len) - 2u;
+        const usize payload_len = as<usize>(seg_len) - 2u;
 
         if (jpeg_impl::is_sof_marker(marker)) {
             if (marker == 0xC2u) {
@@ -609,14 +609,14 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             if (bits != 8 || (channels != 1 && channels != 3)) [[unlikely]] {
                 return ErrorCode::NotSupported;
             }
-            if (payload_len < 6u + static_cast<usize>(channels) * 3u) [[unlikely]] {
+            if (payload_len < 6u + as<usize>(channels) * 3u) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
             for (u16 i = 0; i < channels; ++i) {
                 const u8 id = seg[6 + i * 3];
                 const u8 hv = seg[7 + i * 3];
-                const u8 h_s = static_cast<u8>((hv >> 4) & 0x0Fu);
-                const u8 v_s = static_cast<u8>(hv & 0x0Fu);
+                const u8 h_s = as<u8>((hv >> 4) & 0x0Fu);
+                const u8 v_s = as<u8>(hv & 0x0Fu);
                 const u8 qt = seg[8 + i * 3];
                 if (h_s == 0 || h_s > 4 || v_s == 0 || v_s > 4 || qt >= 4) [[unlikely]] {
                     return ErrorCode::InvalidData;
@@ -626,8 +626,8 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     .h_samp = h_s,
                     .v_samp = v_s,
                     .q_table_id = qt,
-                    .dc_table_id = static_cast<u8>(i == 0 ? 0 : 1),
-                    .ac_table_id = static_cast<u8>(i == 0 ? 0 : 1),
+                    .dc_table_id = as<u8>(i == 0 ? 0 : 1),
+                    .ac_table_id = as<u8>(i == 0 ? 0 : 1),
                 };
             }
             saw_sof = true;
@@ -636,14 +636,14 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 return ErrorCode::InvalidData;
             }
             const u8 num_scan_comps = seg[0];
-            if (num_scan_comps == 0 || payload_len < 1u + static_cast<usize>(num_scan_comps) * 2u + 3u) [[unlikely]] {
+            if (num_scan_comps == 0 || payload_len < 1u + as<usize>(num_scan_comps) * 2u + 3u) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
             for (u8 j = 0; j < num_scan_comps; ++j) {
                 const u8 comp_id = seg[1 + j * 2];
                 const u8 td_ta = seg[2 + j * 2];
-                const u8 dc_id = static_cast<u8>((td_ta >> 4) & 0x0Fu);
-                const u8 ac_id = static_cast<u8>(td_ta & 0x0Fu);
+                const u8 dc_id = as<u8>((td_ta >> 4) & 0x0Fu);
+                const u8 ac_id = as<u8>(td_ta & 0x0Fu);
                 if (dc_id >= 4 || ac_id >= 4) [[unlikely]] {
                     return ErrorCode::InvalidData;
                 }
@@ -666,8 +666,8 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             usize q_off = 0;
             while (q_off < payload_len) {
                 const u8 info = seg[q_off++];
-                const u8 table_id = static_cast<u8>(info & 0x0Fu);
-                const u8 pq = static_cast<u8>((info >> 4) & 0x0Fu);
+                const u8 table_id = as<u8>(info & 0x0Fu);
+                const u8 pq = as<u8>((info >> 4) & 0x0Fu);
                 if (table_id >= 4 || pq > 1) [[unlikely]] {
                     return ErrorCode::InvalidData;
                 }
@@ -698,8 +698,8 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     return ErrorCode::InvalidData;
                 }
                 const u8 info = seg[h_off++];
-                const u8 tc = static_cast<u8>((info >> 4) & 0x0Fu);
-                const u8 th = static_cast<u8>(info & 0x0Fu);
+                const u8 tc = as<u8>((info >> 4) & 0x0Fu);
+                const u8 th = as<u8>(info & 0x0Fu);
                 if (tc > 1 || th >= 4) [[unlikely]] {
                     return ErrorCode::InvalidData;
                 }
@@ -716,7 +716,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 if (num_codes > 0) {
                     mem_copy(ht.values, seg + h_off, num_codes);
                 }
-                ht.num_values = static_cast<u16>(num_codes);
+                ht.num_values = as<u16>(num_codes);
                 ht.populated = true;
                 h_off += num_codes;
             }
@@ -800,7 +800,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     img.pixels = Array<u8>(total_bytes, u8{0}, opts.allocator);
 
     u8* dst = img.pixels.data();
-    const usize row_stride = static_cast<usize>(width) * static_cast<usize>(channels);
+    const usize row_stride = as<usize>(width) * as<usize>(channels);
 
     // Per-MCU spatial component buffers (at most 4x4 blocks = 32x32 floats per component).
     float mcu_planes[3][32 * 32]{};
@@ -820,7 +820,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
             for (u16 ci = 0; ci < channels; ++ci) {
                 const ComponentInfo& c = comps[ci];
-                const u32 cw = static_cast<u32>(c.h_samp) * 8u;
+                const u32 cw = as<u32>(c.h_samp) * 8u;
                 float* plane = mcu_planes[ci];
                 for (u32 v = 0; v < c.v_samp; ++v) {
                     for (u32 h = 0; h < c.h_samp; ++h) {
@@ -844,25 +844,25 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             const u32 lx_end = (c0 + mcu_px_w <= width) ? mcu_px_w : (width - c0);
 
             if (channels == 1) {
-                const u32 y_stride = static_cast<u32>(comps[0].h_samp) * 8u;
+                const u32 y_stride = as<u32>(comps[0].h_samp) * 8u;
                 for (u32 ly = 0; ly < ly_end; ++ly) {
                     const u32 y_r = (comps[0].v_samp == max_v) ? ly : ((ly * comps[0].v_samp) / max_v);
-                    u8* out_row = dst + static_cast<usize>(r0 + ly) * row_stride + static_cast<usize>(c0);
+                    u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0);
                     for (u32 lx = 0; lx < lx_end; ++lx) {
                         const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
                         const float y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.5f;
-                        out_row[lx] = jpeg_impl::clamp_u8(static_cast<int>(y_val));
+                        out_row[lx] = jpeg_impl::clamp_u8(as<int>(y_val));
                     }
                 }
             } else {
-                const u32 y_w = static_cast<u32>(comps[0].h_samp) * 8u;
-                const u32 cb_w = static_cast<u32>(comps[1].h_samp) * 8u;
-                const u32 cr_w = static_cast<u32>(comps[2].h_samp) * 8u;
+                const u32 y_w = as<u32>(comps[0].h_samp) * 8u;
+                const u32 cb_w = as<u32>(comps[1].h_samp) * 8u;
+                const u32 cr_w = as<u32>(comps[2].h_samp) * 8u;
                 for (u32 ly = 0; ly < ly_end; ++ly) {
                     const u32 y_r = (comps[0].v_samp == max_v) ? ly : ((ly * comps[0].v_samp) / max_v);
                     const u32 cb_r = (comps[1].v_samp == max_v) ? ly : ((ly * comps[1].v_samp) / max_v);
                     const u32 cr_r = (comps[2].v_samp == max_v) ? ly : ((ly * comps[2].v_samp) / max_v);
-                    u8* out_row = dst + static_cast<usize>(r0 + ly) * row_stride + static_cast<usize>(c0) * 3u;
+                    u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0) * 3u;
                     for (u32 lx = 0; lx < lx_end; ++lx) {
                         const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
                         const u32 cb_c = (comps[1].h_samp == max_h) ? lx : ((lx * comps[1].h_samp) / max_h);
@@ -872,9 +872,9 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                         const float cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
                         const float cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
 
-                        const int r = static_cast<int>(y_val + 1.402f * cr_val + 128.5f);
-                        const int g = static_cast<int>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
-                        const int b = static_cast<int>(y_val + 1.772f * cb_val + 128.5f);
+                        const int r = as<int>(y_val + 1.402f * cr_val + 128.5f);
+                        const int g = as<int>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
+                        const int b = as<int>(y_val + 1.772f * cb_val + 128.5f);
 
                         out_row[lx * 3u + 0] = jpeg_impl::clamp_u8(r);
                         out_row[lx * 3u + 1] = jpeg_impl::clamp_u8(g);
@@ -909,27 +909,27 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     } else if (q > 100) {
         q = 100;
     }
-    const float scale = (q < 50) ? (5000.0f / static_cast<float>(q)) : (200.0f - 2.0f * static_cast<float>(q));
+    const float scale = (q < 50) ? (5000.0f / as<float>(q)) : (200.0f - 2.0f * as<float>(q));
 
     u8 luma_q[64]{};
     u8 chroma_q[64]{};
     float inv_luma_q[64]{};
     float inv_chroma_q[64]{};
     for (int i = 0; i < 64; ++i) {
-        int vl = static_cast<int>((static_cast<float>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
-        int vc = static_cast<int>((static_cast<float>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
+        int vl = as<int>((as<float>(jpeg_impl::kStdLumaQ[i]) * scale + 50.0f) / 100.0f);
+        int vc = as<int>((as<float>(jpeg_impl::kStdChromaQ[i]) * scale + 50.0f) / 100.0f);
         if (vl < 1) vl = 1;
         if (vl > 255) vl = 255;
         if (vc < 1) vc = 1;
         if (vc > 255) vc = 255;
-        luma_q[i] = static_cast<u8>(vl);
-        chroma_q[i] = static_cast<u8>(vc);
-        inv_luma_q[i] = 1.0f / static_cast<float>(vl);
-        inv_chroma_q[i] = 1.0f / static_cast<float>(vc);
+        luma_q[i] = as<u8>(vl);
+        chroma_q[i] = as<u8>(vc);
+        inv_luma_q[i] = 1.0f / as<float>(vl);
+        inv_chroma_q[i] = 1.0f / as<float>(vc);
     }
 
     const usize approx_bytes =
-        640u + (static_cast<usize>(view.width) * static_cast<usize>(view.height) * view.channels) / 4u;
+        640u + (as<usize>(view.width) * as<usize>(view.height) * view.channels) / 4u;
     Array<u8> out(opts.allocator);
     out.reserve(approx_bytes);
 
@@ -947,7 +947,7 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     // 3. DQT (0xFFDB) - Quantization tables in ITU-T T.81 zigzag order
     out.push_back(0xFFu);
     out.push_back(0xDBu);
-    detail::push_u16_be(out, static_cast<u16>((view.channels == 1) ? 67u : 132u));
+    detail::push_u16_be(out, as<u16>((view.channels == 1) ? 67u : 132u));
     out.push_back(0x00u); // Table 0 (8-bit)
     for (int k = 0; k < 64; ++k) {
         out.push_back(luma_q[jpeg_impl::kZigzag[k]]);
@@ -962,11 +962,11 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     // 4. SOF0 (0xFFC0) - Baseline DCT Frame Header (4:4:4 1x1 sampling)
     out.push_back(0xFFu);
     out.push_back(0xC0u);
-    detail::push_u16_be(out, static_cast<u16>(8u + 3u * view.channels));
+    detail::push_u16_be(out, as<u16>(8u + 3u * view.channels));
     out.push_back(8u); // 8-bit sample precision
-    detail::push_u16_be(out, static_cast<u16>(view.height));
-    detail::push_u16_be(out, static_cast<u16>(view.width));
-    out.push_back(static_cast<u8>(view.channels));
+    detail::push_u16_be(out, as<u16>(view.height));
+    detail::push_u16_be(out, as<u16>(view.width));
+    out.push_back(as<u8>(view.channels));
     if (view.channels == 1) {
         out.push_back(1u);
         out.push_back(0x11u);
@@ -987,8 +987,8 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     auto emit_dht = [&](u8 tc, u8 th, const u8 bits[16], const u8* vals, usize n_vals) {
         out.push_back(0xFFu);
         out.push_back(0xC4u);
-        detail::push_u16_be(out, static_cast<u16>(19u + n_vals));
-        out.push_back(static_cast<u8>((tc << 4) | th));
+        detail::push_u16_be(out, as<u16>(19u + n_vals));
+        out.push_back(as<u8>((tc << 4) | th));
         out.append(ArrayRef<u8>(bits, 16));
         out.append(ArrayRef<u8>(vals, n_vals));
     };
@@ -1003,8 +1003,8 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
     // 6. SOS (0xFFDA) - Scan Header
     out.push_back(0xFFu);
     out.push_back(0xDAu);
-    detail::push_u16_be(out, static_cast<u16>(6u + 2u * view.channels));
-    out.push_back(static_cast<u8>(view.channels));
+    detail::push_u16_be(out, as<u16>(6u + 2u * view.channels));
+    out.push_back(as<u8>(view.channels));
     if (view.channels == 1) {
         out.push_back(1u);
         out.push_back(0x00u);
@@ -1042,10 +1042,10 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
             if (view.channels == 1) {
                 for (u32 y = 0; y < 8u; ++y) {
                     const u32 py = (my * 8u + y < view.height) ? (my * 8u + y) : (view.height - 1u);
-                    const u8* row = src_base + static_cast<usize>(py) * src_stride;
+                    const u8* row = src_base + as<usize>(py) * src_stride;
                     for (u32 x = 0; x < 8u; ++x) {
                         const u32 px = (mx * 8u + x < view.width) ? (mx * 8u + x) : (view.width - 1u);
-                        spatial_y[y * 8u + x] = static_cast<float>(row[px]) - 128.0f;
+                        spatial_y[y * 8u + x] = as<float>(row[px]) - 128.0f;
                     }
                 }
 
@@ -1058,12 +1058,12 @@ Result<Array<u8>> encode_jpeg(const ImageView& view, const JpegEncodeOptions& op
             } else {
                 for (u32 y = 0; y < 8u; ++y) {
                     const u32 py = (my * 8u + y < view.height) ? (my * 8u + y) : (view.height - 1u);
-                    const u8* row = src_base + static_cast<usize>(py) * src_stride;
+                    const u8* row = src_base + as<usize>(py) * src_stride;
                     for (u32 x = 0; x < 8u; ++x) {
                         const u32 px = (mx * 8u + x < view.width) ? (mx * 8u + x) : (view.width - 1u);
-                        const float r = static_cast<float>(row[px * 3u + 0]);
-                        const float g = static_cast<float>(row[px * 3u + 1]);
-                        const float b = static_cast<float>(row[px * 3u + 2]);
+                        const float r = as<float>(row[px * 3u + 0]);
+                        const float g = as<float>(row[px * 3u + 1]);
+                        const float b = as<float>(row[px * 3u + 2]);
 
                         const float y_val = 0.29900f * r + 0.58700f * g + 0.11400f * b;
                         const float cb_val = -0.16874f * r - 0.33126f * g + 0.50000f * b;

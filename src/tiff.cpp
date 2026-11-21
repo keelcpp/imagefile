@@ -79,7 +79,7 @@ struct ByteReader {
             return u64_at(off);
         }
         KEEL_TRY_ASSIGN(const u32 v, u32_at(off));
-        return static_cast<u64>(v);
+        return as<u64>(v);
     }
 };
 
@@ -122,15 +122,15 @@ struct ByteReader {
         return br.u64_at(8);
     }
     KEEL_TRY_ASSIGN(const u32 off32, br.u32_at(4));
-    return static_cast<u64>(off32);
+    return as<u64>(off32);
 }
 
 [[nodiscard]] Result<usize> step_ifd(const ByteReader& br, u64 off, u64* next_off_out,
                                      usize* next_slot_out = nullptr) noexcept {
-    if (off > static_cast<u64>(br.size)) [[unlikely]] {
+    if (off > as<u64>(br.size)) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
-    const usize ifd_off = static_cast<usize>(off);
+    const usize ifd_off = as<usize>(off);
     const usize count_hdr = br.is_big_tiff ? 8u : 2u;
     const usize entry_size = br.is_big_tiff ? 20u : 12u;
     const usize next_ptr_size = br.is_big_tiff ? 8u : 4u;
@@ -146,7 +146,7 @@ struct ByteReader {
         return ErrorCode::InvalidData;
     }
 
-    const usize entries_bytes = static_cast<usize>(entry_count) * entry_size;
+    const usize entries_bytes = as<usize>(entry_count) * entry_size;
     if (ifd_off > br.size - count_hdr || entries_bytes > br.size - ifd_off - count_hdr) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
@@ -158,7 +158,7 @@ struct ByteReader {
     KEEL_TRY_ASSIGN(const u64 next_off, br.offset_at(next_slot));
     if (next_off_out) *next_off_out = next_off;
     if (next_slot_out) *next_slot_out = next_slot;
-    return static_cast<usize>(entry_count);
+    return as<usize>(entry_count);
 }
 
 [[nodiscard]] Result<usize> locate_ifd_for_page(const ByteReader& br, u32 page_zero_based) noexcept {
@@ -176,7 +176,7 @@ struct ByteReader {
         u64 next_off = 0;
         KEEL_TRY(step_ifd(br, off, &next_off));
         if (p == page_zero_based) {
-            return static_cast<usize>(off);
+            return as<usize>(off);
         }
         off = next_off;
     }
@@ -191,7 +191,7 @@ struct ByteReader {
         return ErrorCode::OutOfRange;
     }
     const usize w = kTypeWidth[type];
-    const usize cnt = static_cast<usize>(count);
+    const usize cnt = as<usize>(count);
     const usize total = cnt * w;
     const usize inline_cap = br.is_big_tiff ? 8u : 4u;
     const usize inline_slot_off = br.is_big_tiff ? 12u : 8u;
@@ -200,10 +200,10 @@ struct ByteReader {
     if (total <= inline_cap) {
         base = entry_offset + inline_slot_off;
     } else {
-        if (value_offset > static_cast<u64>(br.size)) [[unlikely]] {
+        if (value_offset > as<u64>(br.size)) [[unlikely]] {
             return ErrorCode::EndOfFile;
         }
-        base = static_cast<usize>(value_offset);
+        base = as<usize>(value_offset);
     }
     KEEL_TRY(br.check(base, total));
 
@@ -306,13 +306,13 @@ struct TiffIfdInfo {
             case 256: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
                 if (v > 0xFFFFFFFFULL) return ErrorCode::OutOfRange;
-                img.width = static_cast<u32>(v);
+                img.width = as<u32>(v);
                 break;
             }
             case 257: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
                 if (v > 0xFFFFFFFFULL) return ErrorCode::OutOfRange;
-                img.height = static_cast<u32>(v);
+                img.height = as<u32>(v);
                 break;
             }
             case 258: {
@@ -323,18 +323,18 @@ struct TiffIfdInfo {
                             return ErrorCode::NotSupported;
                         }
                     }
-                    img.bits_per_sample = static_cast<u16>(bps_vals[0]);
+                    img.bits_per_sample = as<u16>(bps_vals[0]);
                 }
                 break;
             }
             case 259: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.compression = static_cast<u16>(v);
+                img.compression = as<u16>(v);
                 break;
             }
             case 262: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.photometric = static_cast<u16>(v);
+                img.photometric = as<u16>(v);
                 break;
             }
             case 273: {
@@ -343,12 +343,12 @@ struct TiffIfdInfo {
             }
             case 277: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.samples_per_pixel = static_cast<u16>(v);
+                img.samples_per_pixel = as<u16>(v);
                 break;
             }
             case 278: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.rows_per_strip = (v > 0xFFFFFFFFULL) ? 0xFFFFFFFFu : static_cast<u32>(v);
+                img.rows_per_strip = (v > 0xFFFFFFFFULL) ? 0xFFFFFFFFu : as<u32>(v);
                 break;
             }
             case 279: {
@@ -357,12 +357,12 @@ struct TiffIfdInfo {
             }
             case 284: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.planar_config = static_cast<u16>(v);
+                img.planar_config = as<u16>(v);
                 break;
             }
             case 317: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.predictor = static_cast<u16>(v);
+                img.predictor = as<u16>(v);
                 break;
             }
             case 320: {
@@ -372,13 +372,13 @@ struct TiffIfdInfo {
             case 322: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
                 if (v > 0xFFFFFFFFULL) return ErrorCode::OutOfRange;
-                img.tile_width = static_cast<u32>(v);
+                img.tile_width = as<u32>(v);
                 break;
             }
             case 323: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
                 if (v > 0xFFFFFFFFULL) return ErrorCode::OutOfRange;
-                img.tile_length = static_cast<u32>(v);
+                img.tile_length = as<u32>(v);
                 break;
             }
             case 324: {
@@ -391,7 +391,7 @@ struct TiffIfdInfo {
             }
             case 339: {
                 KEEL_TRY_ASSIGN(const u64 v, first_val());
-                img.sample_format = static_cast<u16>(v);
+                img.sample_format = as<u16>(v);
                 break;
             }
             default:
@@ -431,10 +431,10 @@ struct TiffIfdInfo {
     out.reserve(out_hint > 0 ? out_hint : (src_len * 2u));
     usize i = 0;
     while (i < src_len) {
-        const i8 n = static_cast<i8>(src[i++]);
+        const i8 n = as<i8>(src[i++]);
         if (n == -128) continue;
         if (n >= 0) {
-            const usize count = static_cast<usize>(n) + 1u;
+            const usize count = as<usize>(n) + 1u;
             if (count > src_len - i) [[unlikely]] {
                 return ErrorCode::EndOfFile;
             }
@@ -444,7 +444,7 @@ struct TiffIfdInfo {
             out.append(ArrayRef<u8>(src + i, count));
             i += count;
         } else {
-            const usize count = static_cast<usize>(-static_cast<int>(n)) + 1u;
+            const usize count = as<usize>(-as<int>(n)) + 1u;
             if (i >= src_len) [[unlikely]] {
                 return ErrorCode::EndOfFile;
             }
@@ -474,8 +474,8 @@ struct TiffIfdInfo {
 
     for (u32 c = 0; c < 256u; ++c) {
         prefix[c] = 0xFFFFu;
-        suffix[c] = static_cast<u8>(c);
-        first_char[c] = static_cast<u8>(c);
+        suffix[c] = as<u8>(c);
+        first_char[c] = as<u8>(c);
     }
 
     u32 next_code = 258u;
@@ -488,11 +488,11 @@ struct TiffIfdInfo {
     const usize total_bits = src_len * 8u;
     usize bit_pos = 0;
 
-    while (bit_pos + static_cast<usize>(code_width) <= total_bits) {
+    while (bit_pos + as<usize>(code_width) <= total_bits) {
         u32 code = 0;
         for (int i = 0; i < code_width; ++i) {
             const usize byte_pos = bit_pos >> 3;
-            const int bit_off = 7 - static_cast<int>(bit_pos & 7u);
+            const int bit_off = 7 - as<int>(bit_pos & 7u);
             code = (code << 1) | ((src[byte_pos] >> bit_off) & 1u);
             ++bit_pos;
         }
@@ -522,7 +522,7 @@ struct TiffIfdInfo {
             if (cur >= 256u) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
-            entry_first = static_cast<u8>(cur);
+            entry_first = as<u8>(cur);
             stack[sp++] = entry_first;
         } else if (code == next_code && prev_code != kNoCode) {
             entry_first = first_char[prev_code];
@@ -538,7 +538,7 @@ struct TiffIfdInfo {
             if (cur >= 256u) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
-            stack[sp++] = static_cast<u8>(cur);
+            stack[sp++] = as<u8>(cur);
         } else {
             return ErrorCode::InvalidData;
         }
@@ -551,7 +551,7 @@ struct TiffIfdInfo {
         }
 
         if (prev_code != kNoCode && next_code < kMaxCode) {
-            prefix[next_code] = static_cast<u16>(prev_code);
+            prefix[next_code] = as<u16>(prev_code);
             suffix[next_code] = entry_first;
             first_char[next_code] = first_char[prev_code];
             ++next_code;
@@ -567,11 +567,11 @@ struct TiffIfdInfo {
 
 [[nodiscard]] Result<Array<u8>> decompress_block(const ByteReader& br, u64 off64, u64 cnt64, u16 compression,
                                                  usize hint_bytes, usize max_out, Arena& arena, Allocator* alloc) {
-    if (off64 > static_cast<u64>(br.size) || cnt64 > static_cast<u64>(br.size) - off64) [[unlikely]] {
+    if (off64 > as<u64>(br.size) || cnt64 > as<u64>(br.size) - off64) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
-    const usize off = static_cast<usize>(off64);
-    const usize cnt = static_cast<usize>(cnt64);
+    const usize off = as<usize>(off64);
+    const usize cnt = as<usize>(cnt64);
     const u8* src = br.buf + off;
 
     switch (compression) {
@@ -613,7 +613,7 @@ void apply_horizontal_undiff(u8* buf, usize height, usize width, usize spp, usiz
             u8* row = buf + r * row_bytes;
             for (usize c = 1; c < width; ++c) {
                 for (usize s = 0; s < spp; ++s) {
-                    row[c * spp + s] = static_cast<u8>(row[c * spp + s] + row[(c - 1) * spp + s]);
+                    row[c * spp + s] = as<u8>(row[c * spp + s] + row[(c - 1) * spp + s]);
                 }
             }
         }
@@ -626,13 +626,13 @@ void apply_horizontal_undiff(u8* buf, usize height, usize width, usize spp, usiz
                     const usize pof = ((c - 1) * spp + s) * 2u;
                     const u16 cur = big_endian ? detail::read_u16_be(row + off) : detail::read_u16_le(row + off);
                     const u16 prv = big_endian ? detail::read_u16_be(row + pof) : detail::read_u16_le(row + pof);
-                    const u16 v = static_cast<u16>(cur + prv);
+                    const u16 v = as<u16>(cur + prv);
                     if (big_endian) {
-                        row[off] = static_cast<u8>((v >> 8) & 0xFFu);
-                        row[off + 1] = static_cast<u8>(v & 0xFFu);
+                        row[off] = as<u8>((v >> 8) & 0xFFu);
+                        row[off + 1] = as<u8>(v & 0xFFu);
                     } else {
-                        row[off] = static_cast<u8>(v & 0xFFu);
-                        row[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
+                        row[off] = as<u8>(v & 0xFFu);
+                        row[off + 1] = as<u8>((v >> 8) & 0xFFu);
                     }
                 }
             }
@@ -648,15 +648,15 @@ void apply_horizontal_undiff(u8* buf, usize height, usize width, usize spp, usiz
                     const u32 prv = big_endian ? detail::read_u32_be(row + pof) : detail::read_u32_le(row + pof);
                     const u32 v = cur + prv;
                     if (big_endian) {
-                        row[off + 0] = static_cast<u8>((v >> 24) & 0xFFu);
-                        row[off + 1] = static_cast<u8>((v >> 16) & 0xFFu);
-                        row[off + 2] = static_cast<u8>((v >> 8) & 0xFFu);
-                        row[off + 3] = static_cast<u8>(v & 0xFFu);
+                        row[off + 0] = as<u8>((v >> 24) & 0xFFu);
+                        row[off + 1] = as<u8>((v >> 16) & 0xFFu);
+                        row[off + 2] = as<u8>((v >> 8) & 0xFFu);
+                        row[off + 3] = as<u8>(v & 0xFFu);
                     } else {
-                        row[off + 0] = static_cast<u8>(v & 0xFFu);
-                        row[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
-                        row[off + 2] = static_cast<u8>((v >> 16) & 0xFFu);
-                        row[off + 3] = static_cast<u8>((v >> 24) & 0xFFu);
+                        row[off + 0] = as<u8>(v & 0xFFu);
+                        row[off + 1] = as<u8>((v >> 8) & 0xFFu);
+                        row[off + 2] = as<u8>((v >> 16) & 0xFFu);
+                        row[off + 3] = as<u8>((v >> 24) & 0xFFu);
                     }
                 }
             }
@@ -665,12 +665,12 @@ void apply_horizontal_undiff(u8* buf, usize height, usize width, usize spp, usiz
 }
 
 void unpack_subbyte_row(const u8* src, u8* dst, usize width, u16 bits_per_sample) noexcept {
-    const u8 mask = static_cast<u8>((1u << bits_per_sample) - 1u);
+    const u8 mask = as<u8>((1u << bits_per_sample) - 1u);
     for (usize x = 0; x < width; ++x) {
         const usize bit_idx = x * bits_per_sample;
         const usize byte_idx = bit_idx >> 3;
-        const int shift = static_cast<int>(8u - bits_per_sample - (bit_idx & 7u));
-        dst[x] = static_cast<u8>((src[byte_idx] >> shift) & mask);
+        const int shift = as<int>(8u - bits_per_sample - (bit_idx & 7u));
+        dst[x] = as<u8>((src[byte_idx] >> shift) & mask);
     }
 }
 
@@ -679,20 +679,20 @@ void unpack_subbyte_row(const u8* src, u8* dst, usize width, u16 bits_per_sample
 // ============================================================================
 
 void write_u16_le_at(Array<u8>& buf, usize off, u16 v) noexcept {
-    buf[off + 0] = static_cast<u8>(v & 0xFFu);
-    buf[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
+    buf[off + 0] = as<u8>(v & 0xFFu);
+    buf[off + 1] = as<u8>((v >> 8) & 0xFFu);
 }
 
 void write_u32_le_at(Array<u8>& buf, usize off, u32 v) noexcept {
-    buf[off + 0] = static_cast<u8>(v & 0xFFu);
-    buf[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
-    buf[off + 2] = static_cast<u8>((v >> 16) & 0xFFu);
-    buf[off + 3] = static_cast<u8>((v >> 24) & 0xFFu);
+    buf[off + 0] = as<u8>(v & 0xFFu);
+    buf[off + 1] = as<u8>((v >> 8) & 0xFFu);
+    buf[off + 2] = as<u8>((v >> 16) & 0xFFu);
+    buf[off + 3] = as<u8>((v >> 24) & 0xFFu);
 }
 
 void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
-    write_u32_le_at(buf, off + 0, static_cast<u32>(v & 0xFFFFFFFFULL));
-    write_u32_le_at(buf, off + 4, static_cast<u32>((v >> 32) & 0xFFFFFFFFULL));
+    write_u32_le_at(buf, off + 0, as<u32>(v & 0xFFFFFFFFULL));
+    write_u32_le_at(buf, off + 4, as<u32>((v >> 32) & 0xFFFFFFFFULL));
 }
 
 [[nodiscard]] Array<u8> encode_packbits(const u8* src, usize n, Allocator* alloc) {
@@ -706,7 +706,7 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
         }
         const usize run_len = run_end - i;
         if (run_len >= 3u) {
-            out.push_back(static_cast<u8>(static_cast<i8>(-(static_cast<int>(run_len) - 1))));
+            out.push_back(as<u8>(as<i8>(-(as<int>(run_len) - 1))));
             out.push_back(src[i]);
             i = run_end;
             continue;
@@ -719,7 +719,7 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
             ++lit_end;
         }
         const usize lit_len = lit_end - i;
-        out.push_back(static_cast<u8>(lit_len - 1u));
+        out.push_back(as<u8>(lit_len - 1u));
         out.append(ArrayRef<u8>(src + i, lit_len));
         i = lit_end;
     }
@@ -752,13 +752,13 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
         bit_count += code_width;
         while (bit_count >= 8) {
             bit_count -= 8;
-            out.push_back(static_cast<u8>((bit_buf >> bit_count) & 0xFFu));
+            out.push_back(as<u8>((bit_buf >> bit_count) & 0xFFu));
         }
     };
 
     auto flush_bits = [&]() {
         if (bit_count > 0) {
-            out.push_back(static_cast<u8>((bit_buf << (8 - bit_count)) & 0xFFu));
+            out.push_back(as<u8>((bit_buf << (8 - bit_count)) & 0xFFu));
             bit_count = 0;
             bit_buf = 0;
         }
@@ -774,7 +774,7 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
     u32 prefix = src[0];
     for (usize i = 1; i < n; ++i) {
         const u8 c = src[i];
-        const u32 key = (prefix << 8) | static_cast<u32>(c);
+        const u32 key = (prefix << 8) | as<u32>(c);
         u32 h = ((key * 2654435761u) >> 19) & kHashMask;
         bool found = false;
         while (slot_key[h] != kEmptyKey) {
@@ -790,7 +790,7 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
             write_bits(prefix);
             if (next_code < kMaxEntries) {
                 slot_key[h] = key;
-                slot_val[h] = static_cast<u16>(next_code++);
+                slot_val[h] = as<u16>(next_code++);
                 if (next_code == (1u << code_width) && code_width < 12) {
                     ++code_width;
                 }
@@ -817,7 +817,7 @@ void apply_horizontal_diff_le(u8* buf, usize height, usize width, usize spp, usi
             u8* row = buf + r * row_bytes;
             for (usize c = width; c-- > 1u;) {
                 for (usize s = 0; s < spp; ++s) {
-                    row[c * spp + s] = static_cast<u8>(row[c * spp + s] - row[(c - 1u) * spp + s]);
+                    row[c * spp + s] = as<u8>(row[c * spp + s] - row[(c - 1u) * spp + s]);
                 }
             }
         }
@@ -830,9 +830,9 @@ void apply_horizontal_diff_le(u8* buf, usize height, usize width, usize spp, usi
                     const usize pof = ((c - 1u) * spp + s) * 2u;
                     const u16 cur = detail::read_u16_le(row + off);
                     const u16 prv = detail::read_u16_le(row + pof);
-                    const u16 v = static_cast<u16>(cur - prv);
-                    row[off + 0] = static_cast<u8>(v & 0xFFu);
-                    row[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
+                    const u16 v = as<u16>(cur - prv);
+                    row[off + 0] = as<u8>(v & 0xFFu);
+                    row[off + 1] = as<u8>((v >> 8) & 0xFFu);
                 }
             }
         }
@@ -846,10 +846,10 @@ void apply_horizontal_diff_le(u8* buf, usize height, usize width, usize spp, usi
                     const u32 cur = detail::read_u32_le(row + off);
                     const u32 prv = detail::read_u32_le(row + pof);
                     const u32 v = cur - prv;
-                    row[off + 0] = static_cast<u8>(v & 0xFFu);
-                    row[off + 1] = static_cast<u8>((v >> 8) & 0xFFu);
-                    row[off + 2] = static_cast<u8>((v >> 16) & 0xFFu);
-                    row[off + 3] = static_cast<u8>((v >> 24) & 0xFFu);
+                    row[off + 0] = as<u8>(v & 0xFFu);
+                    row[off + 1] = as<u8>((v >> 8) & 0xFFu);
+                    row[off + 2] = as<u8>((v >> 16) & 0xFFu);
+                    row[off + 3] = as<u8>((v >> 24) & 0xFFu);
                 }
             }
         }
@@ -909,27 +909,27 @@ struct RawIfdEntry {
 
 [[nodiscard]] RawIfdEntry make_u16_entry(u16 tag, u16 val) noexcept {
     RawIfdEntry e{.tag = tag, .type = 3, .count = 1};
-    e.inline_bytes[0] = static_cast<u8>(val & 0xFFu);
-    e.inline_bytes[1] = static_cast<u8>((val >> 8) & 0xFFu);
+    e.inline_bytes[0] = as<u8>(val & 0xFFu);
+    e.inline_bytes[1] = as<u8>((val >> 8) & 0xFFu);
     return e;
 }
 
 [[nodiscard]] RawIfdEntry make_u32_entry(u16 tag, u32 val) noexcept {
     RawIfdEntry e{.tag = tag, .type = 4, .count = 1};
-    e.inline_bytes[0] = static_cast<u8>(val & 0xFFu);
-    e.inline_bytes[1] = static_cast<u8>((val >> 8) & 0xFFu);
-    e.inline_bytes[2] = static_cast<u8>((val >> 16) & 0xFFu);
-    e.inline_bytes[3] = static_cast<u8>((val >> 24) & 0xFFu);
+    e.inline_bytes[0] = as<u8>(val & 0xFFu);
+    e.inline_bytes[1] = as<u8>((val >> 8) & 0xFFu);
+    e.inline_bytes[2] = as<u8>((val >> 16) & 0xFFu);
+    e.inline_bytes[3] = as<u8>((val >> 24) & 0xFFu);
     return e;
 }
 
 [[nodiscard]] RawIfdEntry make_offset_or_size_entry(u16 tag, u64 val, bool big_tiff) noexcept {
     if (!big_tiff) {
-        return make_u32_entry(tag, static_cast<u32>(val));
+        return make_u32_entry(tag, as<u32>(val));
     }
     RawIfdEntry e{.tag = tag, .type = 16, .count = 1};
     for (int i = 0; i < 8; ++i) {
-        e.inline_bytes[i] = static_cast<u8>((val >> (8 * i)) & 0xFFu);
+        e.inline_bytes[i] = as<u8>((val >> (8 * i)) & 0xFFu);
     }
     return e;
 }
@@ -947,9 +947,9 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
     buf.resize(ifd_off + ifd_bytes, u8{0});
 
     if (big_tiff) {
-        write_u64_le_at(buf, ifd_off, static_cast<u64>(entries.size()));
+        write_u64_le_at(buf, ifd_off, as<u64>(entries.size()));
     } else {
-        write_u16_le_at(buf, ifd_off, static_cast<u16>(entries.size()));
+        write_u16_le_at(buf, ifd_off, as<u16>(entries.size()));
     }
 
     for (usize i = 0; i < entries.size(); ++i) {
@@ -965,9 +965,9 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
                 mem_copy(buf.data() + pos + 12, en.inline_bytes, 8);
             }
         } else {
-            write_u32_le_at(buf, pos + 4, static_cast<u32>(en.count));
+            write_u32_le_at(buf, pos + 4, as<u32>(en.count));
             if (en.is_external) {
-                write_u32_le_at(buf, pos + 8, static_cast<u32>(en.external_offset));
+                write_u32_le_at(buf, pos + 8, as<u32>(en.external_offset));
             } else {
                 mem_copy(buf.data() + pos + 8, en.inline_bytes, 4);
             }
@@ -975,9 +975,9 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
     }
 
     if (big_tiff) {
-        write_u64_le_at(buf, prev_next_slot, static_cast<u64>(ifd_off));
+        write_u64_le_at(buf, prev_next_slot, as<u64>(ifd_off));
     } else {
-        write_u32_le_at(buf, prev_next_slot, static_cast<u32>(ifd_off));
+        write_u32_le_at(buf, prev_next_slot, as<u32>(ifd_off));
     }
 }
 
@@ -1007,7 +1007,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
         }
         u64 next_off = 0;
         KEEL_TRY_ASSIGN(const usize n_entries, step_ifd(src_br, off, &next_off));
-        const usize ifd_pos = static_cast<usize>(off);
+        const usize ifd_pos = as<usize>(off);
 
         ArenaTemp page_tmp = arena.begin_temp();
         ArenaArray<RawIfdEntry> new_entries(arena, n_entries);
@@ -1027,7 +1027,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
             if (count > kMaxTagArrayCount) [[unlikely]] {
                 return ErrorCode::OutOfRange;
             }
-            const usize total = static_cast<usize>(count) * w;
+            const usize total = as<usize>(count) * w;
 
             // StripOffsets (273) and TileOffsets (324) reference shifted file offsets (+8).
             if (tag == 273u || tag == 324u) {
@@ -1036,7 +1036,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
                 if (offs.size() == 1) {
                     const u64 shifted = offs[0] + kDelta;
                     for (int b = 0; b < 8; ++b) {
-                        ne.inline_bytes[b] = static_cast<u8>((shifted >> (8 * b)) & 0xFFu);
+                        ne.inline_bytes[b] = as<u8>((shifted >> (8 * b)) & 0xFFu);
                     }
                 } else if (offs.size() > 1) {
                     if ((out_buf.size() & 1u) != 0u) out_buf.push_back(0u);
@@ -1051,7 +1051,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
             }
 
             RawIfdEntry ne{.tag = tag, .type = type, .count = count};
-            const usize src_val_pos = (total <= 4u) ? (e + 8u) : static_cast<usize>(voff32);
+            const usize src_val_pos = (total <= 4u) ? (e + 8u) : as<usize>(voff32);
             KEEL_TRY(src_br.check(src_val_pos, total));
             if (total <= 8u) {
                 if (total > 0) {
@@ -1059,7 +1059,7 @@ void emit_ifd(Array<u8>& buf, ArrayRef<RawIfdEntry> entries, bool big_tiff, usiz
                 }
             } else {
                 ne.is_external = true;
-                ne.external_offset = static_cast<u64>(voff32) + kDelta;
+                ne.external_offset = as<u64>(voff32) + kDelta;
             }
             new_entries.push_back(ne);
         }
@@ -1186,9 +1186,9 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         img.palette_bits = 16u;
         u16* pal = img.palette.data();
         for (usize k = 0; k < k_entries; ++k) {
-            pal[k * 3u + 0u] = static_cast<u16>(timg.color_map[0u * k_entries + k] & 0xFFFFu);
-            pal[k * 3u + 1u] = static_cast<u16>(timg.color_map[1u * k_entries + k] & 0xFFFFu);
-            pal[k * 3u + 2u] = static_cast<u16>(timg.color_map[2u * k_entries + k] & 0xFFFFu);
+            pal[k * 3u + 0u] = as<u16>(timg.color_map[0u * k_entries + k] & 0xFFFFu);
+            pal[k * 3u + 1u] = as<u16>(timg.color_map[1u * k_entries + k] & 0xFFFFu);
+            pal[k * 3u + 2u] = as<u16>(timg.color_map[2u * k_entries + k] & 0xFFFFu);
         }
     }
 
@@ -1285,7 +1285,7 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         }
         const usize strips_per_plane = timg.strip_offsets.size() / num_planes;
         const usize rps_eff = (timg.rows_per_strip > 0u && timg.rows_per_strip < 0x80000000u)
-                                  ? static_cast<usize>(timg.rows_per_strip)
+                                  ? as<usize>(timg.rows_per_strip)
                                   : H;
         const usize src_stride =
             subbyte ? ((W * timg.bits_per_sample + 7u) / 8u) : (W * spp_block * bps);
@@ -1345,14 +1345,14 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     if (timg.photometric == 0u) {
         const usize total_samples = H * W * S;
         if (sample_type == SampleType::U8) {
-            const u8 max_val = subbyte ? static_cast<u8>((1u << timg.bits_per_sample) - 1u) : u8{255};
+            const u8 max_val = subbyte ? as<u8>((1u << timg.bits_per_sample) - 1u) : u8{255};
             for (usize i = 0; i < total_samples; ++i) {
-                dst[i] = static_cast<u8>(max_val - dst[i]);
+                dst[i] = as<u8>(max_val - dst[i]);
             }
         } else if (sample_type == SampleType::U16) {
             for (usize i = 0; i < total_samples; ++i) {
                 const u16 v = detail::read_u16_native(dst + i * 2u);
-                detail::write_u16_native(dst + i * 2u, static_cast<u16>(65535u - v));
+                detail::write_u16_native(dst + i * 2u, as<u16>(65535u - v));
             }
         } else if (sample_type == SampleType::U32) {
             for (usize i = 0; i < total_samples; ++i) {
@@ -1446,7 +1446,7 @@ Result<Array<u8>> encode_tiff(const ImageView& view, const TiffEncodeOptions& op
         if (ex_br.big_endian) [[unlikely]] {
             return ErrorCode::NotSupported;
         }
-        const u64 projected = static_cast<u64>(append_to_existing.size()) + static_cast<u64>(strip.size()) + 512ULL;
+        const u64 projected = as<u64>(append_to_existing.size()) + as<u64>(strip.size()) + 512ULL;
         big_tiff = opts.bigtiff || ex_br.is_big_tiff || (projected > kClassicLimit);
 
         if (!ex_br.is_big_tiff && big_tiff) {
@@ -1471,7 +1471,7 @@ Result<Array<u8>> encode_tiff(const ImageView& view, const TiffEncodeOptions& op
             }
         }
     } else {
-        const u64 projected = 16ULL + static_cast<u64>(strip.size()) + 512ULL;
+        const u64 projected = 16ULL + as<u64>(strip.size()) + 512ULL;
         big_tiff = opts.bigtiff || (projected > kClassicLimit);
         out.reserve((big_tiff ? 16u : 8u) + strip.size() + 320u);
         if (big_tiff) {
@@ -1507,8 +1507,8 @@ Result<Array<u8>> encode_tiff(const ImageView& view, const TiffEncodeOptions& op
     tiff_impl::RawIfdEntry bps_entry{.tag = 258u, .type = 3u, .count = S};
     if (bps_total_bytes <= inline_cap) {
         for (usize s = 0; s < S; ++s) {
-            bps_entry.inline_bytes[s * 2u + 0u] = static_cast<u8>(spec.bits_per_sample & 0xFFu);
-            bps_entry.inline_bytes[s * 2u + 1u] = static_cast<u8>((spec.bits_per_sample >> 8) & 0xFFu);
+            bps_entry.inline_bytes[s * 2u + 0u] = as<u8>(spec.bits_per_sample & 0xFFu);
+            bps_entry.inline_bytes[s * 2u + 1u] = as<u8>((spec.bits_per_sample >> 8) & 0xFFu);
         }
     } else {
         bps_entry.is_external = true;

@@ -122,28 +122,28 @@ struct PngIhdr {
             case 1: // Sub
                 for (usize x = 0; x < row_bytes; ++x) {
                     const u8 left = (x >= safe_bpp) ? curr[x - safe_bpp] : 0u;
-                    curr[x] = static_cast<u8>(filt[x] + left);
+                    curr[x] = as<u8>(filt[x] + left);
                 }
                 break;
             case 2: // Up
                 for (usize x = 0; x < row_bytes; ++x) {
                     const u8 up = prev ? prev[x] : 0u;
-                    curr[x] = static_cast<u8>(filt[x] + up);
+                    curr[x] = as<u8>(filt[x] + up);
                 }
                 break;
             case 3: // Average
                 for (usize x = 0; x < row_bytes; ++x) {
-                    const int left = (x >= safe_bpp) ? static_cast<int>(curr[x - safe_bpp]) : 0;
-                    const int up = prev ? static_cast<int>(prev[x]) : 0;
-                    curr[x] = static_cast<u8>(static_cast<int>(filt[x]) + ((left + up) >> 1));
+                    const int left = (x >= safe_bpp) ? as<int>(curr[x - safe_bpp]) : 0;
+                    const int up = prev ? as<int>(prev[x]) : 0;
+                    curr[x] = as<u8>(as<int>(filt[x]) + ((left + up) >> 1));
                 }
                 break;
             case 4: // Paeth
                 for (usize x = 0; x < row_bytes; ++x) {
-                    const int left = (x >= safe_bpp) ? static_cast<int>(curr[x - safe_bpp]) : 0;
-                    const int up = prev ? static_cast<int>(prev[x]) : 0;
-                    const int up_left = (prev && x >= safe_bpp) ? static_cast<int>(prev[x - safe_bpp]) : 0;
-                    curr[x] = static_cast<u8>(static_cast<int>(filt[x]) + paeth_predictor(left, up, up_left));
+                    const int left = (x >= safe_bpp) ? as<int>(curr[x - safe_bpp]) : 0;
+                    const int up = prev ? as<int>(prev[x]) : 0;
+                    const int up_left = (prev && x >= safe_bpp) ? as<int>(prev[x - safe_bpp]) : 0;
+                    curr[x] = as<u8>(as<int>(filt[x]) + paeth_predictor(left, up, up_left));
                 }
                 break;
             default:
@@ -155,7 +155,7 @@ struct PngIhdr {
 
 void scatter_pass_pixels(const u8* pass_rows, usize pass_w, usize pass_h, usize row_bytes, usize x0, usize dx, usize y0,
                          usize dy, const PngIhdr& ihdr, u16 channels, u8* dst_pixels) noexcept {
-    const usize full_w = static_cast<usize>(ihdr.width);
+    const usize full_w = as<usize>(ihdr.width);
     const u8 bd = ihdr.bit_depth;
 
     if (dx == 1u && y0 == 0u && dy == 1u && bd == 8u && ihdr.color_type != 3u) {
@@ -168,17 +168,17 @@ void scatter_pass_pixels(const u8* pass_rows, usize pass_w, usize pass_h, usize 
         const u8* srow = pass_rows + py * row_bytes;
         for (usize px = 0; px < pass_w; ++px) {
             const usize c = x0 + px * dx;
-            const usize dst_pix_idx = (r * full_w + c) * static_cast<usize>(channels);
+            const usize dst_pix_idx = (r * full_w + c) * as<usize>(channels);
 
             if (bd == 16u) {
                 for (u16 ch = 0; ch < channels; ++ch) {
-                    const usize soff = (px * static_cast<usize>(channels) + ch) * 2u;
+                    const usize soff = (px * as<usize>(channels) + ch) * 2u;
                     const u16 val = detail::read_u16_be(srow + soff);
                     detail::write_u16_native(dst_pixels + (dst_pix_idx + ch) * 2u, val);
                 }
             } else if (bd == 8u) {
                 for (u16 ch = 0; ch < channels; ++ch) {
-                    dst_pixels[dst_pix_idx + ch] = srow[px * static_cast<usize>(channels) + ch];
+                    dst_pixels[dst_pix_idx + ch] = srow[px * as<usize>(channels) + ch];
                 }
             } else {
                 // Sub-byte 1, 2, or 4-bit (color_type == 0 or 3, channels == 1)
@@ -188,17 +188,17 @@ void scatter_pass_pixels(const u8* pass_rows, usize pass_w, usize pass_h, usize 
                     raw_sample = ((px & 1u) == 0u) ? (b >> 4) : (b & 0x0Fu);
                 } else if (bd == 2u) {
                     const u8 b = srow[px >> 2];
-                    raw_sample = static_cast<u8>((b >> (6u - 2u * (px & 3u))) & 0x03u);
+                    raw_sample = as<u8>((b >> (6u - 2u * (px & 3u))) & 0x03u);
                 } else {
                     const u8 b = srow[px >> 3];
-                    raw_sample = static_cast<u8>((b >> (7u - (px & 7u))) & 0x01u);
+                    raw_sample = as<u8>((b >> (7u - (px & 7u))) & 0x01u);
                 }
 
                 if (ihdr.color_type == 3u) {
                     dst_pixels[dst_pix_idx] = raw_sample;
                 } else {
                     const u32 max_val = (1u << bd) - 1u;
-                    dst_pixels[dst_pix_idx] = static_cast<u8>((static_cast<u32>(raw_sample) * 255u) / max_val);
+                    dst_pixels[dst_pix_idx] = as<u8>((as<u32>(raw_sample) * 255u) / max_val);
                 }
             }
         }
@@ -206,12 +206,12 @@ void scatter_pass_pixels(const u8* pass_rows, usize pass_w, usize pass_h, usize 
 }
 
 void append_chunk(Array<u8>& out, const char type[4], const u8* payload, usize payload_len) {
-    detail::push_u32_be(out, static_cast<u32>(payload_len));
+    detail::push_u32_be(out, as<u32>(payload_len));
     const usize type_pos = out.size();
-    out.push_back(static_cast<u8>(type[0]));
-    out.push_back(static_cast<u8>(type[1]));
-    out.push_back(static_cast<u8>(type[2]));
-    out.push_back(static_cast<u8>(type[3]));
+    out.push_back(as<u8>(type[0]));
+    out.push_back(as<u8>(type[1]));
+    out.push_back(as<u8>(type[2]));
+    out.push_back(as<u8>(type[3]));
     if (payload_len > 0 && payload != nullptr) {
         out.append(ArrayRef<u8>(payload, payload_len));
     }
@@ -262,7 +262,7 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             return ErrorCode::EndOfFile;
         }
         const u32 chunk_len_u32 = detail::read_u32_be(data + offset);
-        const usize chunk_len = static_cast<usize>(chunk_len_u32);
+        const usize chunk_len = as<usize>(chunk_len_u32);
         if (len - offset - 12u < chunk_len) [[unlikely]] {
             return ErrorCode::EndOfFile;
         }
@@ -282,7 +282,7 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             const usize num_entries = chunk_len / 3u;
             palette.resize(num_entries * 3u);
             for (usize i = 0; i < num_entries * 3u; ++i) {
-                palette[i] = static_cast<u16>(chunk_data[i]);
+                palette[i] = as<u16>(chunk_data[i]);
             }
             saw_plte = true;
         } else if (mem_eq(chunk_type, "IDAT", 4)) {
@@ -308,9 +308,9 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::InvalidData;
     }
 
-    const usize w = static_cast<usize>(ihdr.width);
-    const usize h = static_cast<usize>(ihdr.height);
-    const usize bits_per_pixel = static_cast<usize>(channels) * static_cast<usize>(ihdr.bit_depth);
+    const usize w = as<usize>(ihdr.width);
+    const usize h = as<usize>(ihdr.height);
+    const usize bits_per_pixel = as<usize>(channels) * as<usize>(ihdr.bit_depth);
     const usize safe_bpp = (bits_per_pixel >= 8u) ? (bits_per_pixel / 8u) : 1u;
 
     constexpr usize kX0[7] = {0, 4, 0, 2, 0, 1, 0};
@@ -439,10 +439,10 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
 
     const bool is_16bit = (view.sample_type == SampleType::U16);
     const u8 bit_depth = is_16bit ? 16u : 8u;
-    const usize w = static_cast<usize>(view.width);
-    const usize h = static_cast<usize>(view.height);
+    const usize w = as<usize>(view.width);
+    const usize h = as<usize>(view.height);
     const usize row_bytes = vv.tight_row_bytes;
-    const usize bpp = static_cast<usize>(view.channels) * (is_16bit ? 2u : 1u);
+    const usize bpp = as<usize>(view.channels) * (is_16bit ? 2u : 1u);
 
     if (row_bytes + 1u > (~usize{0}) / h) [[unlikely]] {
         return ErrorCode::OutOfRange;
@@ -460,11 +460,11 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
         if (!is_16bit) {
             mem_copy(curr_row.data(), src_row, row_bytes);
         } else {
-            const usize num_samples = w * static_cast<usize>(view.channels);
+            const usize num_samples = w * as<usize>(view.channels);
             for (usize s = 0; s < num_samples; ++s) {
                 const u16 val = detail::read_u16_native(src_row + s * 2u);
-                curr_row[s * 2u] = static_cast<u8>((val >> 8) & 0xFFu);
-                curr_row[s * 2u + 1u] = static_cast<u8>(val & 0xFFu);
+                curr_row[s * 2u] = as<u8>((val >> 8) & 0xFFu);
+                curr_row[s * 2u + 1u] = as<u8>(val & 0xFFu);
             }
         }
 
@@ -476,7 +476,7 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
             const u8* row_ptr = curr_row.data();
             for (usize x = 0; x < row_bytes; ++x) {
                 const u8 left = (x >= bpp) ? row_ptr[x - bpp] : 0u;
-                filtered.push_back(static_cast<u8>(row_ptr[x] - left));
+                filtered.push_back(as<u8>(row_ptr[x] - left));
             }
         }
     }
@@ -489,14 +489,14 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
     out.append(ArrayRef<u8>(png_impl::kPngSignature, 8));
 
     u8 ihdr_payload[13] = {};
-    ihdr_payload[0] = static_cast<u8>((view.width >> 24) & 0xFFu);
-    ihdr_payload[1] = static_cast<u8>((view.width >> 16) & 0xFFu);
-    ihdr_payload[2] = static_cast<u8>((view.width >> 8) & 0xFFu);
-    ihdr_payload[3] = static_cast<u8>(view.width & 0xFFu);
-    ihdr_payload[4] = static_cast<u8>((view.height >> 24) & 0xFFu);
-    ihdr_payload[5] = static_cast<u8>((view.height >> 16) & 0xFFu);
-    ihdr_payload[6] = static_cast<u8>((view.height >> 8) & 0xFFu);
-    ihdr_payload[7] = static_cast<u8>(view.height & 0xFFu);
+    ihdr_payload[0] = as<u8>((view.width >> 24) & 0xFFu);
+    ihdr_payload[1] = as<u8>((view.width >> 16) & 0xFFu);
+    ihdr_payload[2] = as<u8>((view.width >> 8) & 0xFFu);
+    ihdr_payload[3] = as<u8>(view.width & 0xFFu);
+    ihdr_payload[4] = as<u8>((view.height >> 24) & 0xFFu);
+    ihdr_payload[5] = as<u8>((view.height >> 16) & 0xFFu);
+    ihdr_payload[6] = as<u8>((view.height >> 8) & 0xFFu);
+    ihdr_payload[7] = as<u8>(view.height & 0xFFu);
     ihdr_payload[8] = bit_depth;
     ihdr_payload[9] = color_type;
     ihdr_payload[10] = 0u;
@@ -507,7 +507,7 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
     if (has_palette) {
         Array<u8> plte_bytes(opts.palette.size(), u8{0}, scratch.allocator());
         for (usize i = 0; i < opts.palette.size(); ++i) {
-            plte_bytes[i] = static_cast<u8>(keel::min<u16>(opts.palette[i], 255u));
+            plte_bytes[i] = as<u8>(keel::min<u16>(opts.palette[i], 255u));
         }
         png_impl::append_chunk(out, "PLTE", plte_bytes.data(), plte_bytes.size());
     }

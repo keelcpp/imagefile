@@ -38,7 +38,7 @@ struct BmpHeader {
     if (hdr.header_size < 12u) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
-    if (len < 14u + static_cast<usize>(hdr.header_size)) [[unlikely]] {
+    if (len < 14u + as<usize>(hdr.header_size)) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
 
@@ -54,18 +54,18 @@ struct BmpHeader {
         if (hdr.header_size < 40u) [[unlikely]] {
             return ErrorCode::InvalidData;
         }
-        const i32 raw_w = static_cast<i32>(detail::read_u32_le(data + 18));
-        const i32 raw_h = static_cast<i32>(detail::read_u32_le(data + 22));
+        const i32 raw_w = as<i32>(detail::read_u32_le(data + 18));
+        const i32 raw_h = as<i32>(detail::read_u32_le(data + 22));
         const u16 planes = detail::read_u16_le(data + 26);
-        if (raw_w <= 0 || raw_h == 0 || raw_h == static_cast<i32>(0x80000000u) || planes != 1u) [[unlikely]] {
+        if (raw_w <= 0 || raw_h == 0 || raw_h == as<i32>(0x80000000u) || planes != 1u) [[unlikely]] {
             return ErrorCode::InvalidData;
         }
-        hdr.width = static_cast<u32>(raw_w);
+        hdr.width = as<u32>(raw_w);
         if (raw_h < 0) {
             hdr.top_down = true;
-            hdr.height = static_cast<u32>(-raw_h);
+            hdr.height = as<u32>(-raw_h);
         } else {
-            hdr.height = static_cast<u32>(raw_h);
+            hdr.height = as<u32>(raw_h);
         }
         hdr.bit_count = detail::read_u16_le(data + 28);
         hdr.compression = detail::read_u32_le(data + 30);
@@ -88,9 +88,9 @@ struct BmpHeader {
 
 [[nodiscard]] bool is_gray_ramp_palette(ArrayRef<u8> bytes, const BmpHeader& hdr) noexcept {
     if (hdr.bit_count != 8u) return false;
-    usize pal_size = (hdr.num_colors != 0) ? static_cast<usize>(hdr.num_colors) : 256u;
+    usize pal_size = (hdr.num_colors != 0) ? as<usize>(hdr.num_colors) : 256u;
     if (pal_size != 256u) return false;
-    const usize pal_off = 14u + static_cast<usize>(hdr.header_size);
+    const usize pal_off = 14u + as<usize>(hdr.header_size);
     const usize entry_bytes = (hdr.header_size == 12u) ? 3u : 4u;
     if (bytes.size() < pal_off || bytes.size() - pal_off < pal_size * entry_bytes) return false;
     const u8* p = bytes.data() + pal_off;
@@ -141,11 +141,11 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     bool is_palette_gray = false;
 
     if (hdr.bit_count <= 8u) {
-        pal_size = (hdr.num_colors != 0) ? static_cast<usize>(hdr.num_colors) : (usize{1} << hdr.bit_count);
+        pal_size = (hdr.num_colors != 0) ? as<usize>(hdr.num_colors) : (usize{1} << hdr.bit_count);
         if (pal_size > 256u) [[unlikely]] {
             return ErrorCode::InvalidData;
         }
-        const usize pal_off = 14u + static_cast<usize>(hdr.header_size);
+        const usize pal_off = 14u + as<usize>(hdr.header_size);
         const usize entry_bytes = (hdr.header_size == 12u) ? 3u : 4u;
         if (len < pal_off || len - pal_off < pal_size * entry_bytes) [[unlikely]] {
             return ErrorCode::EndOfFile;
@@ -171,14 +171,14 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     KEEL_TRY_ASSIGN(const usize out_bytes,
                     detail::validate_decode_allocation(hdr.width, hdr.height, out_channels, SampleType::U8, opts));
 
-    if (len < static_cast<usize>(hdr.off_bits)) [[unlikely]] {
+    if (len < as<usize>(hdr.off_bits)) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
 
     const u8* pixel_data = data + hdr.off_bits;
-    const usize pixel_data_len = len - static_cast<usize>(hdr.off_bits);
-    const usize w = static_cast<usize>(hdr.width);
-    const usize h = static_cast<usize>(hdr.height);
+    const usize pixel_data_len = len - as<usize>(hdr.off_bits);
+    const usize w = as<usize>(hdr.width);
+    const usize h = as<usize>(hdr.height);
 
     Allocator* dst_alloc = opts.allocator ? opts.allocator : default_allocator();
     Image img;
@@ -232,7 +232,7 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         for (usize r = 0; r < h; ++r) {
             const usize src_y = hdr.top_down ? r : (h - 1u - r);
             const u8* srow = indices.data() + src_y * w;
-            u8* drow = dst + r * w * static_cast<usize>(out_channels);
+            u8* drow = dst + r * w * as<usize>(out_channels);
             if (is_palette_gray) {
                 mem_copy(drow, srow, w);
             } else {
@@ -253,7 +253,7 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::NotSupported;
     }
 
-    const usize row_stride = ((w * static_cast<usize>(hdr.bit_count) + 31u) / 32u) * 4u;
+    const usize row_stride = ((w * as<usize>(hdr.bit_count) + 31u) / 32u) * 4u;
     if (row_stride > 0 && h > (~usize{0}) / row_stride) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
@@ -264,7 +264,7 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     for (usize r = 0; r < h; ++r) {
         const usize src_y = hdr.top_down ? r : (h - 1u - r);
         const u8* srow = pixel_data + src_y * row_stride;
-        u8* drow = dst + r * w * static_cast<usize>(out_channels);
+        u8* drow = dst + r * w * as<usize>(out_channels);
 
         if (hdr.bit_count == 8u && is_palette_gray) {
             mem_copy(drow, srow, w);
@@ -278,7 +278,7 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     idx = ((c & 1u) == 0u) ? (b >> 4) : (b & 0x0Fu);
                 } else {
                     const u8 b = srow[c >> 3];
-                    idx = static_cast<u8>((b >> (7u - (c & 7u))) & 0x01u);
+                    idx = as<u8>((b >> (7u - (c & 7u))) & 0x01u);
                 }
                 if (idx < pal_size) {
                     drow[c * 3u + 0u] = pal_rgb[idx][0];
@@ -302,9 +302,9 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         } else if (hdr.bit_count == 16u) {
             for (usize c = 0; c < w; ++c) {
                 const u16 v = detail::read_u16_le(srow + c * 2u);
-                drow[c * 3u + 0u] = static_cast<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
-                drow[c * 3u + 1u] = static_cast<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
-                drow[c * 3u + 2u] = static_cast<u8>(((v & 0x1Fu) * 255u) / 31u);
+                drow[c * 3u + 0u] = as<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
+                drow[c * 3u + 1u] = as<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
+                drow[c * 3u + 2u] = as<u8>(((v & 0x1Fu) * 255u) / 31u);
             }
         }
     }
@@ -324,10 +324,10 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
         return ErrorCode::OutOfRange;
     }
 
-    const usize w = static_cast<usize>(view.width);
-    const usize h = static_cast<usize>(view.height);
+    const usize w = as<usize>(view.width);
+    const usize h = as<usize>(view.height);
     const u16 bit_count = (view.channels == 1) ? 8u : ((view.channels == 3) ? 24u : 32u);
-    const usize row_stride = ((w * static_cast<usize>(bit_count) + 31u) / 32u) * 4u;
+    const usize row_stride = ((w * as<usize>(bit_count) + 31u) / 32u) * 4u;
     const usize pal_bytes = (view.channels == 1) ? 1024u : 0u;
     const usize off_bits = 14u + 40u + pal_bytes;
 
@@ -344,10 +344,10 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
     // 1. BITMAPFILEHEADER (14 bytes)
     out.push_back('B');
     out.push_back('M');
-    detail::push_u32_le(out, static_cast<u32>(file_size));
+    detail::push_u32_le(out, as<u32>(file_size));
     detail::push_u16_le(out, 0u);
     detail::push_u16_le(out, 0u);
-    detail::push_u32_le(out, static_cast<u32>(off_bits));
+    detail::push_u32_le(out, as<u32>(off_bits));
 
     // 2. BITMAPINFOHEADER (40 bytes)
     detail::push_u32_le(out, 40u);
@@ -356,7 +356,7 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
     detail::push_u16_le(out, 1u);
     detail::push_u16_le(out, bit_count);
     detail::push_u32_le(out, 0u);
-    detail::push_u32_le(out, static_cast<u32>(image_size));
+    detail::push_u32_le(out, as<u32>(image_size));
     detail::push_u32_le(out, 2835u);
     detail::push_u32_le(out, 2835u);
     detail::push_u32_le(out, (view.channels == 1) ? 256u : 0u);
@@ -365,9 +365,9 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
     // 3. Grayscale identity palette for 8-bit 1-channel BMP
     if (view.channels == 1) {
         for (u32 i = 0; i < 256u; ++i) {
-            out.push_back(static_cast<u8>(i));
-            out.push_back(static_cast<u8>(i));
-            out.push_back(static_cast<u8>(i));
+            out.push_back(as<u8>(i));
+            out.push_back(as<u8>(i));
+            out.push_back(as<u8>(i));
             out.push_back(0u);
         }
     }

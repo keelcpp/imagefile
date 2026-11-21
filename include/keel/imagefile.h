@@ -46,7 +46,7 @@ enum class SampleType : u8 {
 }
 
 [[nodiscard]] constexpr u16 sample_bit_depth(SampleType t) noexcept {
-    return static_cast<u16>(sample_byte_size(t) * 8u);
+    return as<u16>(sample_byte_size(t) * 8u);
 }
 
 struct ImageInfo {
@@ -81,7 +81,7 @@ struct ImageView {
     [[nodiscard]] constexpr usize effective_row_stride() const noexcept {
         return (row_stride_bytes != 0)
                    ? row_stride_bytes
-                   : (static_cast<usize>(width) * static_cast<usize>(channels) * sample_byte_size(sample_type));
+                   : (as<usize>(width) * as<usize>(channels) * sample_byte_size(sample_type));
     }
 
     [[nodiscard]] constexpr bool empty() const noexcept {
@@ -108,7 +108,7 @@ struct Image {
     [[nodiscard]] bool has_palette() const noexcept { return palette_bits != 0 && !palette.empty(); }
     [[nodiscard]] usize palette_entry_count() const noexcept { return palette.size() / 3u; }
     [[nodiscard]] usize row_stride_bytes() const noexcept {
-        return static_cast<usize>(width) * static_cast<usize>(channels) * sample_byte_size(sample_type);
+        return as<usize>(width) * as<usize>(channels) * sample_byte_size(sample_type);
     }
 
     [[nodiscard]] ImageView view() const noexcept KEEL_LIFETIMEBOUND {

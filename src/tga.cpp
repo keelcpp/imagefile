@@ -93,7 +93,7 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     const usize len = bytes.size();
     const u8* data = bytes.data();
-    usize offset = 18u + static_cast<usize>(hdr.id_length);
+    usize offset = 18u + as<usize>(hdr.id_length);
     if (len < offset) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
@@ -103,19 +103,19 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     Array<u8> cmap_rgba(scratch.allocator());
     if (hdr.color_map_type == 1 && hdr.cmap_length > 0) {
-        const usize entry_bytes = (hdr.cmap_depth == 15) ? 2u : static_cast<usize>(hdr.cmap_depth / 8u);
-        const usize cmap_bytes = static_cast<usize>(hdr.cmap_length) * entry_bytes;
+        const usize entry_bytes = (hdr.cmap_depth == 15) ? 2u : as<usize>(hdr.cmap_depth / 8u);
+        const usize cmap_bytes = as<usize>(hdr.cmap_length) * entry_bytes;
         if (len - offset < cmap_bytes) [[unlikely]] {
             return ErrorCode::EndOfFile;
         }
-        cmap_rgba.assign(static_cast<usize>(hdr.cmap_length) * 4u, u8{255});
+        cmap_rgba.assign(as<usize>(hdr.cmap_length) * 4u, u8{255});
         for (usize i = 0; i < hdr.cmap_length; ++i) {
             const u8* e = data + offset + i * entry_bytes;
             if (entry_bytes == 2u) {
                 const u16 v = detail::read_u16_le(e);
-                cmap_rgba[i * 4u + 0u] = static_cast<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
-                cmap_rgba[i * 4u + 1u] = static_cast<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
-                cmap_rgba[i * 4u + 2u] = static_cast<u8>(((v & 0x1Fu) * 255u) / 31u);
+                cmap_rgba[i * 4u + 0u] = as<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
+                cmap_rgba[i * 4u + 1u] = as<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
+                cmap_rgba[i * 4u + 2u] = as<u8>(((v & 0x1Fu) * 255u) / 31u);
             } else {
                 cmap_rgba[i * 4u + 0u] = e[2];
                 cmap_rgba[i * 4u + 1u] = e[1];
@@ -128,10 +128,10 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         offset += cmap_bytes;
     }
 
-    const usize w = static_cast<usize>(hdr.width);
-    const usize h = static_cast<usize>(hdr.height);
+    const usize w = as<usize>(hdr.width);
+    const usize h = as<usize>(hdr.height);
     const usize total_pixels = w * h;
-    const usize src_bpp = static_cast<usize>(hdr.pixel_depth / 8u);
+    const usize src_bpp = as<usize>(hdr.pixel_depth / 8u);
     const bool is_rle = (hdr.image_type == 9 || hdr.image_type == 10 || hdr.image_type == 11);
     const bool top_down = (hdr.image_desc & 0x20u) != 0u;
     const bool right_to_left = (hdr.image_desc & 0x10u) != 0u;
@@ -149,7 +149,7 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         u8* rdst = raw_pixels.data();
         while (pixel_idx < total_pixels && p < len) {
             const u8 pkt = data[p++];
-            const usize count = static_cast<usize>(pkt & 0x7Fu) + 1u;
+            const usize count = as<usize>(pkt & 0x7Fu) + 1u;
             if ((pkt & 0x80u) != 0u) {
                 if (len - p < src_bpp) [[unlikely]] {
                     return ErrorCode::EndOfFile;
@@ -194,15 +194,15 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     for (usize r = 0; r < h; ++r) {
         const usize src_y = top_down ? r : (h - 1u - r);
         const u8* srow = raw_pixels.data() + src_y * w * src_bpp;
-        u8* drow = dst + r * w * static_cast<usize>(out_channels);
+        u8* drow = dst + r * w * as<usize>(out_channels);
 
         for (usize c = 0; c < w; ++c) {
             const usize src_x = right_to_left ? (w - 1u - c) : c;
             const u8* spx = srow + src_x * src_bpp;
-            u8* dpx = drow + c * static_cast<usize>(out_channels);
+            u8* dpx = drow + c * as<usize>(out_channels);
 
             if (is_indexed) {
-                const usize raw_idx = (src_bpp == 1u) ? static_cast<usize>(spx[0]) : detail::read_u16_le(spx);
+                const usize raw_idx = (src_bpp == 1u) ? as<usize>(spx[0]) : detail::read_u16_le(spx);
                 if (raw_idx >= hdr.cmap_start && (raw_idx - hdr.cmap_start) < hdr.cmap_length) {
                     const usize ci = raw_idx - hdr.cmap_start;
                     dpx[0] = cmap_rgba[ci * 4u + 0u];
@@ -214,9 +214,9 @@ Result<Image> decode_tga(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 dpx[0] = spx[0];
             } else if (src_bpp == 2u) {
                 const u16 v = detail::read_u16_le(spx);
-                dpx[0] = static_cast<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
-                dpx[1] = static_cast<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
-                dpx[2] = static_cast<u8>(((v & 0x1Fu) * 255u) / 31u);
+                dpx[0] = as<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
+                dpx[1] = as<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
+                dpx[2] = as<u8>(((v & 0x1Fu) * 255u) / 31u);
             } else if (src_bpp == 3u) {
                 dpx[0] = spx[2];
                 dpx[1] = spx[1];
@@ -245,16 +245,16 @@ Result<Array<u8>> encode_tga(const ImageView& view, Allocator* alloc) {
         return ErrorCode::OutOfRange;
     }
 
-    const usize w = static_cast<usize>(view.width);
-    const usize h = static_cast<usize>(view.height);
-    const usize pixel_bytes = w * h * static_cast<usize>(view.channels);
+    const usize w = as<usize>(view.width);
+    const usize h = as<usize>(view.height);
+    const usize pixel_bytes = w * h * as<usize>(view.channels);
 
     Allocator* dst_alloc = alloc ? alloc : default_allocator();
     Array<u8> out(dst_alloc);
     out.reserve(18u + pixel_bytes);
 
     const u8 image_type = (view.channels == 1) ? 3u : 2u;
-    const u8 pixel_depth = static_cast<u8>(view.channels * 8u);
+    const u8 pixel_depth = as<u8>(view.channels * 8u);
     const u8 image_desc = (view.channels == 4) ? 0x28u : 0x20u; // Top-left origin (+ 8 alpha bits when RGBA)
 
     out.push_back(0u);
@@ -265,8 +265,8 @@ Result<Array<u8>> encode_tga(const ImageView& view, Allocator* alloc) {
     out.push_back(0u);
     detail::push_u16_le(out, 0u);
     detail::push_u16_le(out, 0u);
-    detail::push_u16_le(out, static_cast<u16>(view.width));
-    detail::push_u16_le(out, static_cast<u16>(view.height));
+    detail::push_u16_le(out, as<u16>(view.width));
+    detail::push_u16_le(out, as<u16>(view.height));
     out.push_back(pixel_depth);
     out.push_back(image_desc);
 
@@ -275,7 +275,7 @@ Result<Array<u8>> encode_tga(const ImageView& view, Allocator* alloc) {
 
     for (usize r = 0; r < h; ++r) {
         const u8* srow = view.pixels.data() + r * vv.stride_bytes;
-        u8* drow = dst + r * w * static_cast<usize>(view.channels);
+        u8* drow = dst + r * w * as<usize>(view.channels);
         if (view.channels == 1) {
             mem_copy(drow, srow, w);
         } else if (view.channels == 3) {

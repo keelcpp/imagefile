@@ -100,7 +100,7 @@ Result<Image> expand_palette(const Image& indexed, Allocator* alloc) {
         return ErrorCode::NotSupported;
     }
 
-    const usize num_pixels = static_cast<usize>(indexed.width) * static_cast<usize>(indexed.height);
+    const usize num_pixels = as<usize>(indexed.width) * as<usize>(indexed.height);
     const usize idx_bps = sample_byte_size(indexed.sample_type);
     if (indexed.pixels.size() < num_pixels * idx_bps) [[unlikely]] {
         return ErrorCode::InvalidData;
@@ -129,7 +129,7 @@ Result<Image> expand_palette(const Image& indexed, Allocator* alloc) {
 
     for (usize i = 0; i < num_pixels; ++i) {
         const usize idx =
-            (indexed.sample_type == SampleType::U8) ? static_cast<usize>(src[i]) : detail::read_u16_native(src + i * 2u);
+            (indexed.sample_type == SampleType::U8) ? as<usize>(src[i]) : detail::read_u16_native(src + i * 2u);
         u16 r = 0;
         u16 g = 0;
         u16 b = 0;
@@ -139,9 +139,9 @@ Result<Image> expand_palette(const Image& indexed, Allocator* alloc) {
             b = pal[idx * 3u + 2u];
         }
         if (out_type == SampleType::U8) {
-            dst[i * 3u + 0u] = static_cast<u8>(r & 0xFFu);
-            dst[i * 3u + 1u] = static_cast<u8>(g & 0xFFu);
-            dst[i * 3u + 2u] = static_cast<u8>(b & 0xFFu);
+            dst[i * 3u + 0u] = as<u8>(r & 0xFFu);
+            dst[i * 3u + 1u] = as<u8>(g & 0xFFu);
+            dst[i * 3u + 2u] = as<u8>(b & 0xFFu);
         } else {
             detail::write_u16_native(dst + (i * 3u + 0u) * 2u, r);
             detail::write_u16_native(dst + (i * 3u + 1u) * 2u, g);

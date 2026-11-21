@@ -36,13 +36,13 @@ namespace pnm_impl {
     }
     u64 acc = 0;
     while (p < len && is_digit(data[p])) {
-        acc = acc * 10u + static_cast<u64>(data[p] - '0');
+        acc = acc * 10u + as<u64>(data[p] - '0');
         if (acc > 0xFFFFFFFFULL) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         ++p;
     }
-    val = static_cast<u32>(acc);
+    val = as<u32>(acc);
     return ErrorCode::Ok;
 }
 
@@ -65,7 +65,7 @@ struct PnmHeader {
     }
 
     PnmHeader hdr;
-    hdr.magic = static_cast<int>(data[1] - '0');
+    hdr.magic = as<int>(data[1] - '0');
     usize p = 2u;
 
     if (const ErrorCode ec = read_next_u32(data, len, p, hdr.width); ec != ErrorCode::Ok) return ec;
@@ -112,7 +112,7 @@ void push_u32_ascii(Array<u8>& buf, u32 v) {
         return;
     }
     while (v > 0) {
-        digits[n++] = static_cast<u8>('0' + (v % 10u));
+        digits[n++] = as<u8>('0' + (v % 10u));
         v /= 10u;
     }
     while (n > 0) {
@@ -152,8 +152,8 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     const usize len = bytes.size();
     const u8* data = bytes.data();
-    const usize w = static_cast<usize>(hdr.width);
-    const usize h = static_cast<usize>(hdr.height);
+    const usize w = as<usize>(hdr.width);
+    const usize h = as<usize>(hdr.height);
 
     Allocator* dst_alloc = opts.allocator ? opts.allocator : default_allocator();
     Image img;
@@ -176,14 +176,14 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 const u8* srow = data + hdr.data_offset + r * row_bytes;
                 u8* drow = dst + r * w;
                 for (usize c = 0; c < w; ++c) {
-                    const u8 bit = static_cast<u8>((srow[c >> 3] >> (7u - (c & 7u))) & 1u);
+                    const u8 bit = as<u8>((srow[c >> 3] >> (7u - (c & 7u))) & 1u);
                     drow[c] = bit ? 0u : 255u;
                 }
             }
             return img;
         }
 
-        const usize total_samples = w * h * static_cast<usize>(channels);
+        const usize total_samples = w * h * as<usize>(channels);
         const usize src_bytes = total_samples * (is_16bit ? 2u : 1u);
         if (len - hdr.data_offset < src_bytes) [[unlikely]] {
             return ErrorCode::EndOfFile;
@@ -194,8 +194,8 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 mem_copy(dst, src, total_samples);
             } else {
                 for (usize i = 0; i < total_samples; ++i) {
-                    const u32 v = (src[i] > hdr.maxval) ? hdr.maxval : static_cast<u32>(src[i]);
-                    dst[i] = static_cast<u8>((v * 255u + (hdr.maxval >> 1)) / hdr.maxval);
+                    const u32 v = (src[i] > hdr.maxval) ? hdr.maxval : as<u32>(src[i]);
+                    dst[i] = as<u8>((v * 255u + (hdr.maxval >> 1)) / hdr.maxval);
                 }
             }
         } else {
@@ -203,9 +203,9 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 u32 v = detail::read_u16_be(src + i * 2u);
                 if (v > hdr.maxval) v = hdr.maxval;
                 if (hdr.maxval != 65535u) {
-                    v = static_cast<u32>((static_cast<u64>(v) * 65535ULL + (hdr.maxval >> 1)) / hdr.maxval);
+                    v = as<u32>((as<u64>(v) * 65535ULL + (hdr.maxval >> 1)) / hdr.maxval);
                 }
-                detail::write_u16_native(dst + i * 2u, static_cast<u16>(v));
+                detail::write_u16_native(dst + i * 2u, as<u16>(v));
             }
         }
         return img;
@@ -213,7 +213,7 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     // ASCII formats: P1, P2, P3
     usize p = hdr.data_offset;
-    const usize total_samples = w * h * static_cast<usize>(channels);
+    const usize total_samples = w * h * as<usize>(channels);
     for (usize i = 0; i < total_samples; ++i) {
         u32 val = 0;
         const ErrorCode ec = pnm_impl::read_next_u32(data, len, p, val);
@@ -227,13 +227,13 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             dst[i] = (val != 0u) ? 0u : 255u;
         } else if (!is_16bit) {
             if (val > hdr.maxval) val = hdr.maxval;
-            dst[i] = (hdr.maxval == 255u) ? static_cast<u8>(val)
-                                          : static_cast<u8>((val * 255u + (hdr.maxval >> 1)) / hdr.maxval);
+            dst[i] = (hdr.maxval == 255u) ? as<u8>(val)
+                                          : as<u8>((val * 255u + (hdr.maxval >> 1)) / hdr.maxval);
         } else {
             if (val > hdr.maxval) val = hdr.maxval;
             const u16 v16 = (hdr.maxval == 65535u)
-                                ? static_cast<u16>(val)
-                                : static_cast<u16>((static_cast<u64>(val) * 65535ULL + (hdr.maxval >> 1)) / hdr.maxval);
+                                ? as<u16>(val)
+                                : as<u16>((as<u64>(val) * 65535ULL + (hdr.maxval >> 1)) / hdr.maxval);
             detail::write_u16_native(dst + i * 2u, v16);
         }
     }
@@ -270,8 +270,8 @@ Result<Array<u8>> encode_pnm(const ImageView& view, const PnmEncodeOptions& opts
         return ErrorCode::InvalidArgument;
     }
 
-    const usize w = static_cast<usize>(view.width);
-    const usize h = static_cast<usize>(view.height);
+    const usize w = as<usize>(view.width);
+    const usize h = as<usize>(view.height);
     const bool is_16bit = (view.sample_type == SampleType::U16);
     Allocator* dst_alloc = opts.allocator ? opts.allocator : default_allocator();
 
@@ -303,7 +303,7 @@ Result<Array<u8>> encode_pnm(const ImageView& view, const PnmEncodeOptions& opts
                     is_black = (detail::read_u16_native(srow + c * 2u) < 32768u);
                 }
                 if (is_black) {
-                    drow[c >> 3] |= static_cast<u8>(1u << (7u - (c & 7u)));
+                    drow[c >> 3] |= as<u8>(1u << (7u - (c & 7u)));
                 }
             }
         }
@@ -312,7 +312,7 @@ Result<Array<u8>> encode_pnm(const ImageView& view, const PnmEncodeOptions& opts
 
     const u8 magic_digit = (sub == PnmSubformat::Pgm) ? '5' : '6';
     const u32 maxval = is_16bit ? 65535u : 255u;
-    const usize payload_bytes = w * h * static_cast<usize>(view.channels) * (is_16bit ? 2u : 1u);
+    const usize payload_bytes = w * h * as<usize>(view.channels) * (is_16bit ? 2u : 1u);
 
     out.reserve(40u + payload_bytes);
     out.push_back('P');
@@ -334,14 +334,14 @@ Result<Array<u8>> encode_pnm(const ImageView& view, const PnmEncodeOptions& opts
             mem_copy(dst + r * vv.tight_row_bytes, view.pixels.data() + r * vv.stride_bytes, vv.tight_row_bytes);
         }
     } else {
-        const usize row_samples = w * static_cast<usize>(view.channels);
+        const usize row_samples = w * as<usize>(view.channels);
         for (usize r = 0; r < h; ++r) {
             const u8* srow = view.pixels.data() + r * vv.stride_bytes;
             u8* drow = dst + r * row_samples * 2u;
             for (usize s = 0; s < row_samples; ++s) {
                 const u16 v = detail::read_u16_native(srow + s * 2u);
-                drow[s * 2u] = static_cast<u8>((v >> 8) & 0xFFu);
-                drow[s * 2u + 1u] = static_cast<u8>(v & 0xFFu);
+                drow[s * 2u] = as<u8>((v >> 8) & 0xFFu);
+                drow[s * 2u + 1u] = as<u8>(v & 0xFFu);
             }
         }
     }

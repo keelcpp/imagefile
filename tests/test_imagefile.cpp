@@ -59,14 +59,14 @@ Array<u8> make_zlib_stored(ArrayRef<u8> raw) {
     usize pos = 0;
     do {
         const usize rem = raw.size() - pos;
-        const u16 blk = static_cast<u16>((rem > 65535u) ? 65535u : rem);
+        const u16 blk = keel::as<u16>((rem > 65535u) ? 65535u : rem);
         const bool last = (pos + blk == raw.size());
         z.push_back(last ? 0x01u : 0x00u);
-        z.push_back(static_cast<u8>(blk & 0xFFu));
-        z.push_back(static_cast<u8>((blk >> 8) & 0xFFu));
-        const u16 nlen = static_cast<u16>(~blk);
-        z.push_back(static_cast<u8>(nlen & 0xFFu));
-        z.push_back(static_cast<u8>((nlen >> 8) & 0xFFu));
+        z.push_back(keel::as<u8>(blk & 0xFFu));
+        z.push_back(keel::as<u8>((blk >> 8) & 0xFFu));
+        const u16 nlen = keel::as<u16>(~blk);
+        z.push_back(keel::as<u8>(nlen & 0xFFu));
+        z.push_back(keel::as<u8>((nlen >> 8) & 0xFFu));
         if (blk > 0) {
             z.append(raw.slice(pos, blk));
         }
@@ -74,31 +74,31 @@ Array<u8> make_zlib_stored(ArrayRef<u8> raw) {
     } while (pos < raw.size());
 
     const u32 adler = test_adler32(raw.data(), raw.size());
-    z.push_back(static_cast<u8>((adler >> 24) & 0xFFu));
-    z.push_back(static_cast<u8>((adler >> 16) & 0xFFu));
-    z.push_back(static_cast<u8>((adler >> 8) & 0xFFu));
-    z.push_back(static_cast<u8>(adler & 0xFFu));
+    z.push_back(keel::as<u8>((adler >> 24) & 0xFFu));
+    z.push_back(keel::as<u8>((adler >> 16) & 0xFFu));
+    z.push_back(keel::as<u8>((adler >> 8) & 0xFFu));
+    z.push_back(keel::as<u8>(adler & 0xFFu));
     return z;
 }
 
 void append_png_chunk(Array<u8>& png, const char type[4], ArrayRef<u8> payload) {
-    const u32 len = static_cast<u32>(payload.size());
-    png.push_back(static_cast<u8>((len >> 24) & 0xFFu));
-    png.push_back(static_cast<u8>((len >> 16) & 0xFFu));
-    png.push_back(static_cast<u8>((len >> 8) & 0xFFu));
-    png.push_back(static_cast<u8>(len & 0xFFu));
+    const u32 len = keel::as<u32>(payload.size());
+    png.push_back(keel::as<u8>((len >> 24) & 0xFFu));
+    png.push_back(keel::as<u8>((len >> 16) & 0xFFu));
+    png.push_back(keel::as<u8>((len >> 8) & 0xFFu));
+    png.push_back(keel::as<u8>(len & 0xFFu));
 
     const usize type_start = png.size();
     for (int i = 0; i < 4; ++i) {
-        png.push_back(static_cast<u8>(type[i]));
+        png.push_back(keel::as<u8>(type[i]));
     }
     png.append(payload);
 
     const u32 crc = test_crc32(png.data() + type_start, 4u + payload.size());
-    png.push_back(static_cast<u8>((crc >> 24) & 0xFFu));
-    png.push_back(static_cast<u8>((crc >> 16) & 0xFFu));
-    png.push_back(static_cast<u8>((crc >> 8) & 0xFFu));
-    png.push_back(static_cast<u8>(crc & 0xFFu));
+    png.push_back(keel::as<u8>((crc >> 24) & 0xFFu));
+    png.push_back(keel::as<u8>((crc >> 16) & 0xFFu));
+    png.push_back(keel::as<u8>((crc >> 8) & 0xFFu));
+    png.push_back(keel::as<u8>(crc & 0xFFu));
 }
 
 Array<u8> build_raw_png(u32 w, u32 h, u8 bit_depth, u8 color_type, u8 interlace, ArrayRef<u8> raw_scanlines,
@@ -108,10 +108,10 @@ Array<u8> build_raw_png(u32 w, u32 h, u8 bit_depth, u8 color_type, u8 interlace,
     png.append(ArrayRef<u8>(sig, 8));
 
     u8 ihdr[13] = {
-        static_cast<u8>((w >> 24) & 0xFFu), static_cast<u8>((w >> 16) & 0xFFu),
-        static_cast<u8>((w >> 8) & 0xFFu),  static_cast<u8>(w & 0xFFu),
-        static_cast<u8>((h >> 24) & 0xFFu), static_cast<u8>((h >> 16) & 0xFFu),
-        static_cast<u8>((h >> 8) & 0xFFu),  static_cast<u8>(h & 0xFFu),
+        keel::as<u8>((w >> 24) & 0xFFu), keel::as<u8>((w >> 16) & 0xFFu),
+        keel::as<u8>((w >> 8) & 0xFFu),  keel::as<u8>(w & 0xFFu),
+        keel::as<u8>((h >> 24) & 0xFFu), keel::as<u8>((h >> 16) & 0xFFu),
+        keel::as<u8>((h >> 8) & 0xFFu),  keel::as<u8>(h & 0xFFu),
         bit_depth,
         color_type,
         0u,
@@ -134,7 +134,7 @@ Image make_test_imagefile(u32 w, u32 h, u16 ch, SampleType st) {
     img.height = h;
     img.channels = ch;
     img.sample_type = st;
-    const usize n_samples = static_cast<usize>(w) * static_cast<usize>(h) * static_cast<usize>(ch);
+    const usize n_samples = keel::as<usize>(w) * keel::as<usize>(h) * keel::as<usize>(ch);
     const usize bps = sample_byte_size(st);
     img.pixels = Array<u8>(n_samples * bps, u8{0});
     u8* p = img.pixels.data();
@@ -144,41 +144,41 @@ Image make_test_imagefile(u32 w, u32 h, u16 ch, SampleType st) {
         rng = rng * 1664525u + 1013904223u;
         switch (st) {
             case SampleType::U8: {
-                p[i] = static_cast<u8>((i * 29u + (rng >> 24)) & 0xFFu);
+                p[i] = keel::as<u8>((i * 29u + (rng >> 24)) & 0xFFu);
                 break;
             }
             case SampleType::U16: {
-                const u16 v = static_cast<u16>((i * 257u + (rng >> 16)) & 0xFFFFu);
+                const u16 v = keel::as<u16>((i * 257u + (rng >> 16)) & 0xFFFFu);
                 std::memcpy(p + i * 2u, &v, 2);
                 break;
             }
             case SampleType::U32: {
-                const u32 v = rng ^ static_cast<u32>(i * 65537u);
+                const u32 v = rng ^ keel::as<u32>(i * 65537u);
                 std::memcpy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::I8: {
-                const i8 v = static_cast<i8>(static_cast<int>((i * 19u + (rng >> 24)) & 0xFFu) - 128);
+                const i8 v = keel::as<i8>(keel::as<int>((i * 19u + (rng >> 24)) & 0xFFu) - 128);
                 std::memcpy(p + i, &v, 1);
                 break;
             }
             case SampleType::I16: {
-                const i16 v = static_cast<i16>(static_cast<int>((i * 521u + (rng >> 16)) & 0xFFFFu) - 32768);
+                const i16 v = keel::as<i16>(keel::as<int>((i * 521u + (rng >> 16)) & 0xFFFFu) - 32768);
                 std::memcpy(p + i * 2u, &v, 2);
                 break;
             }
             case SampleType::I32: {
-                const i32 v = static_cast<i32>(rng) - 1000000000;
+                const i32 v = keel::as<i32>(rng) - 1000000000;
                 std::memcpy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::F32: {
-                const float v = static_cast<float>(static_cast<int>(rng & 0xFFFFu) - 32768) * 0.03125f;
+                const float v = keel::as<float>(keel::as<int>(rng & 0xFFFFu) - 32768) * 0.03125f;
                 std::memcpy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::F64: {
-                const double v = static_cast<double>(static_cast<int>(rng & 0xFFFFFFu) - 8388608) * 0.0001220703125;
+                const double v = keel::as<double>(keel::as<int>(rng & 0xFFFFFFu) - 8388608) * 0.0001220703125;
                 std::memcpy(p + i * 8u, &v, 8);
                 break;
             }
@@ -236,7 +236,7 @@ void test_png() {
         idx_img.palette_bits = 8;
         idx_img.pixels = Array<u8>(24, u8{0});
         for (usize i = 0; i < 24; ++i) {
-            idx_img.pixels[i] = static_cast<u8>(i % 4u);
+            idx_img.pixels[i] = keel::as<u8>(i % 4u);
         }
         const u16 pal[12] = {
             10, 20, 30,    // 0
@@ -282,7 +282,7 @@ void test_png() {
         const u32 W = 4, H = 5;
         u8 expected[W * H * 3]{};
         for (usize i = 0; i < sizeof(expected); ++i) {
-            expected[i] = static_cast<u8>((i * 37u + 11u) & 0xFFu);
+            expected[i] = keel::as<u8>((i * 37u + 11u) & 0xFFu);
         }
         const usize row_b = W * 3u;
         Array<u8> raw;
@@ -291,12 +291,12 @@ void test_png() {
             const int pa = (p >= a) ? (p - a) : (a - p);
             const int pb = (p >= b) ? (p - b) : (b - p);
             const int pc = (p >= c) ? (p - c) : (c - p);
-            if (pa <= pb && pa <= pc) return static_cast<u8>(a);
-            if (pb <= pc) return static_cast<u8>(b);
-            return static_cast<u8>(c);
+            if (pa <= pb && pa <= pc) return keel::as<u8>(a);
+            if (pb <= pc) return keel::as<u8>(b);
+            return keel::as<u8>(c);
         };
         for (u32 r = 0; r < H; ++r) {
-            const u8 ftype = static_cast<u8>(r % 5u);
+            const u8 ftype = keel::as<u8>(r % 5u);
             raw.push_back(ftype);
             const u8* cur = expected + r * row_b;
             const u8* prev = (r > 0) ? (expected + (r - 1u) * row_b) : nullptr;
@@ -307,9 +307,9 @@ void test_png() {
                 u8 pred = 0;
                 if (ftype == 1) pred = a;
                 else if (ftype == 2) pred = b;
-                else if (ftype == 3) pred = static_cast<u8>((static_cast<int>(a) + static_cast<int>(b)) >> 1);
+                else if (ftype == 3) pred = keel::as<u8>((keel::as<int>(a) + keel::as<int>(b)) >> 1);
                 else if (ftype == 4) pred = paeth(a, b, c);
-                raw.push_back(static_cast<u8>(cur[x] - pred));
+                raw.push_back(keel::as<u8>(cur[x] - pred));
             }
         }
         Array<u8> png = build_raw_png(W, H, 8, 2, 0, raw);
@@ -321,7 +321,7 @@ void test_png() {
     {
         const u32 W = 5, H = 5;
         u8 expected[25]{};
-        for (u32 i = 0; i < 25; ++i) expected[i] = static_cast<u8>(i * 10u + 3u);
+        for (u32 i = 0; i < 25; ++i) expected[i] = keel::as<u8>(i * 10u + 3u);
 
         const u32 x0[7] = {0, 4, 0, 2, 0, 1, 0};
         const u32 y0[7] = {0, 0, 4, 0, 2, 0, 1};
@@ -360,7 +360,7 @@ void test_png() {
         u8 padded[3 * 16]{};
         for (u32 r = 0; r < 3; ++r) {
             for (u32 c = 0; c < 10; ++c) {
-                padded[r * 16u + c] = static_cast<u8>(r * 30u + c + 1u);
+                padded[r * 16u + c] = keel::as<u8>(r * 30u + c + 1u);
             }
         }
         ImageView sub_view{
@@ -379,7 +379,7 @@ void test_png() {
             if (dec) {
                 for (u32 r = 0; r < 3; ++r) {
                     for (u32 c = 0; c < 10; ++c) {
-                        TEST_CHECK(dec->pixels[r * 10u + c] == static_cast<u8>(r * 30u + c + 1u));
+                        TEST_CHECK(dec->pixels[r * 10u + c] == keel::as<u8>(r * 30u + c + 1u));
                     }
                 }
             }
@@ -403,9 +403,9 @@ void test_jpeg() {
         for (u32 r = 0; r < 24; ++r) {
             for (u32 c = 0; c < 32; ++c) {
                 const usize idx = (r * 32u + c) * 3u;
-                grad.pixels[idx + 0] = static_cast<u8>(c * 7u + 10u);
-                grad.pixels[idx + 1] = static_cast<u8>(r * 9u + 15u);
-                grad.pixels[idx + 2] = static_cast<u8>(180u - c * 3u);
+                grad.pixels[idx + 0] = keel::as<u8>(c * 7u + 10u);
+                grad.pixels[idx + 1] = keel::as<u8>(r * 9u + 15u);
+                grad.pixels[idx + 2] = keel::as<u8>(180u - c * 3u);
             }
         }
 
@@ -425,11 +425,11 @@ void test_jpeg() {
                 double err_hi = 0.0;
                 double err_lo = 0.0;
                 for (usize i = 0; i < grad.pixels.size(); ++i) {
-                    err_hi += std::fabs(static_cast<double>(grad.pixels[i]) - static_cast<double>(dec_hi->pixels[i]));
-                    err_lo += std::fabs(static_cast<double>(grad.pixels[i]) - static_cast<double>(dec_lo->pixels[i]));
+                    err_hi += std::fabs(keel::as<double>(grad.pixels[i]) - keel::as<double>(dec_hi->pixels[i]));
+                    err_lo += std::fabs(keel::as<double>(grad.pixels[i]) - keel::as<double>(dec_lo->pixels[i]));
                 }
-                err_hi /= static_cast<double>(grad.pixels.size());
-                err_lo /= static_cast<double>(grad.pixels.size());
+                err_hi /= keel::as<double>(grad.pixels.size());
+                err_lo /= keel::as<double>(grad.pixels.size());
                 TEST_CHECK(err_hi < 2.5);
                 TEST_CHECK(err_hi < err_lo);
             }
@@ -445,7 +445,7 @@ void test_jpeg() {
             img.height = wh[1];
             img.channels = ch;
             img.sample_type = SampleType::U8;
-            img.pixels = Array<u8>(static_cast<usize>(wh[0]) * wh[1] * ch, u8{120});
+            img.pixels = Array<u8>(keel::as<usize>(wh[0]) * wh[1] * ch, u8{120});
             auto enc = encode_jpeg(img, JpegEncodeOptions{.quality = 92});
             TEST_CHECK(enc.is_ok());
             if (enc) {
@@ -453,7 +453,7 @@ void test_jpeg() {
                 TEST_CHECK(dec.is_ok() && dec->width == wh[0] && dec->height == wh[1] && dec->channels == ch);
                 if (dec) {
                     for (usize i = 0; i < dec->pixels.size(); ++i) {
-                        const int diff = static_cast<int>(dec->pixels[i]) - 120;
+                        const int diff = keel::as<int>(dec->pixels[i]) - 120;
                         TEST_CHECK(diff >= -3 && diff <= 3);
                     }
                 }
@@ -496,7 +496,7 @@ void test_jpeg() {
             auto find_sos_end = [](ArrayRef<u8> b) -> usize {
                 for (usize i = 2; i + 4 < b.size(); ++i) {
                     if (b[i] == 0xFFu && b[i + 1] == 0xDAu) {
-                        const usize slen = (static_cast<usize>(b[i + 2]) << 8) | b[i + 3];
+                        const usize slen = (keel::as<usize>(b[i + 2]) << 8) | b[i + 3];
                         return i + 2 + slen;
                     }
                 }
@@ -528,8 +528,8 @@ void test_jpeg() {
             auto dec_rst = decode_jpeg(rst_jpeg);
             TEST_CHECK(dec_rst.is_ok() && dec_rst->width == 16u && dec_rst->height == 8u);
             if (dec_rst) {
-                TEST_CHECK(std::abs(static_cast<int>(dec_rst->pixels[0]) - 64) <= 2);
-                TEST_CHECK(std::abs(static_cast<int>(dec_rst->pixels[15]) - 192) <= 2);
+                TEST_CHECK(std::abs(keel::as<int>(dec_rst->pixels[0]) - 64) <= 2);
+                TEST_CHECK(std::abs(keel::as<int>(dec_rst->pixels[15]) - 192) <= 2);
             }
         }
     }
@@ -578,8 +578,8 @@ void test_bmp() {
         bmp[59] = 100;
         bmp[60] = 50;
 
-        const u32 data_off = static_cast<u32>(bmp.size());
-        bmp[10] = static_cast<u8>(data_off);
+        const u32 data_off = keel::as<u32>(bmp.size());
+        bmp[10] = keel::as<u8>(data_off);
         // Bottom row (r=1): run of 4 pixels of index 1, EOL (00 00)
         // Top row (r=0): absolute mode (00 04) [0, 1, 0, 1], EOB (00 01)
         const u8 rle_stream[] = {
@@ -587,7 +587,7 @@ void test_bmp() {
             0, 4, 0, 1, 0, 1, 0, 1, // row 0 (top) + EOB
         };
         bmp.append(ArrayRef<u8>(rle_stream, sizeof(rle_stream)));
-        const u32 file_sz = static_cast<u32>(bmp.size());
+        const u32 file_sz = keel::as<u32>(bmp.size());
         std::memcpy(bmp.data() + 2, &file_sz, 4);
 
         auto dec = decode_bmp(bmp);
@@ -753,10 +753,10 @@ Array<u8> build_test_gif(u16 w, u16 h, bool interlaced, ArrayRef<u8> stream_indi
     Array<u8> gif;
     const u8 hdr[13] = {
         'G', 'I', 'F', '8', '9', 'a',
-        static_cast<u8>(w & 0xFFu),
-        static_cast<u8>((w >> 8) & 0xFFu),
-        static_cast<u8>(h & 0xFFu),
-        static_cast<u8>((h >> 8) & 0xFFu),
+        keel::as<u8>(w & 0xFFu),
+        keel::as<u8>((w >> 8) & 0xFFu),
+        keel::as<u8>(h & 0xFFu),
+        keel::as<u8>((h >> 8) & 0xFFu),
         0x81u, // GCT present, 2^(1+1) = 4 entries
         0u,
         0u,
@@ -773,11 +773,11 @@ Array<u8> build_test_gif(u16 w, u16 h, bool interlaced, ArrayRef<u8> stream_indi
     // Image Descriptor (0x2C)
     const u8 desc[10] = {
         0x2Cu, 0u, 0u, 0u, 0u,
-        static_cast<u8>(w & 0xFFu),
-        static_cast<u8>((w >> 8) & 0xFFu),
-        static_cast<u8>(h & 0xFFu),
-        static_cast<u8>((h >> 8) & 0xFFu),
-        static_cast<u8>(interlaced ? 0x40u : 0x00u),
+        keel::as<u8>(w & 0xFFu),
+        keel::as<u8>((w >> 8) & 0xFFu),
+        keel::as<u8>(h & 0xFFu),
+        keel::as<u8>((h >> 8) & 0xFFu),
+        keel::as<u8>(interlaced ? 0x40u : 0x00u),
     };
     gif.append(ArrayRef<u8>(desc, 10));
 
@@ -791,7 +791,7 @@ Array<u8> build_test_gif(u16 w, u16 h, bool interlaced, ArrayRef<u8> stream_indi
         bit_buf |= (code & 7u) << bit_cnt;
         bit_cnt += 3;
         while (bit_cnt >= 8) {
-            lzw_bytes.push_back(static_cast<u8>(bit_buf & 0xFFu));
+            lzw_bytes.push_back(keel::as<u8>(bit_buf & 0xFFu));
             bit_buf >>= 8;
             bit_cnt -= 8;
         }
@@ -802,13 +802,13 @@ Array<u8> build_test_gif(u16 w, u16 h, bool interlaced, ArrayRef<u8> stream_indi
     }
     put3(5u); // EOI
     if (bit_cnt > 0) {
-        lzw_bytes.push_back(static_cast<u8>(bit_buf & 0xFFu));
+        lzw_bytes.push_back(keel::as<u8>(bit_buf & 0xFFu));
     }
 
     usize pos = 0;
     while (pos < lzw_bytes.size()) {
         const usize chunk = (lzw_bytes.size() - pos > 255u) ? 255u : (lzw_bytes.size() - pos);
-        gif.push_back(static_cast<u8>(chunk));
+        gif.push_back(keel::as<u8>(chunk));
         gif.append(lzw_bytes.slice(pos, chunk));
         pos += chunk;
     }
@@ -821,7 +821,7 @@ void test_gif() {
     // Sequential 4x3 GIF
     {
         u8 idx[12]{};
-        for (u8 i = 0; i < 12; ++i) idx[i] = static_cast<u8>(i & 3u);
+        for (u8 i = 0; i < 12; ++i) idx[i] = keel::as<u8>(i & 3u);
         Array<u8> gif = build_test_gif(4, 3, false, ArrayRef<u8>(idx, 12));
 
         TEST_CHECK(sniff_image_format(gif) == ImageFormat::Gif);
@@ -852,16 +852,16 @@ void test_gif() {
         u8 stream[W * H]{};
         for (u32 s = 0; s < 9; ++s) {
             const u32 r = interlace_row_order[s];
-            stream[s * 2u + 0] = static_cast<u8>(r & 3u);
-            stream[s * 2u + 1] = static_cast<u8>((r + 1u) & 3u);
+            stream[s * 2u + 0] = keel::as<u8>(r & 3u);
+            stream[s * 2u + 1] = keel::as<u8>((r + 1u) & 3u);
         }
         Array<u8> gif = build_test_gif(W, H, true, ArrayRef<u8>(stream, sizeof(stream)));
         auto dec = decode_gif(gif);
         TEST_CHECK(dec.is_ok() && dec->width == W && dec->height == H);
         if (dec) {
             for (u32 r = 0; r < H; ++r) {
-                TEST_CHECK(dec->pixels[r * 2u + 0] == static_cast<u8>(r & 3u));
-                TEST_CHECK(dec->pixels[r * 2u + 1] == static_cast<u8>((r + 1u) & 3u));
+                TEST_CHECK(dec->pixels[r * 2u + 0] == keel::as<u8>(r & 3u));
+                TEST_CHECK(dec->pixels[r * 2u + 1] == keel::as<u8>((r + 1u) & 3u));
             }
         }
     }
@@ -1119,14 +1119,14 @@ void test_tiff_roundtrips() {
     {
         Array<u8> tiled;
         auto push16 = [&](u16 v) {
-            tiled.push_back(static_cast<u8>(v & 0xFFu));
-            tiled.push_back(static_cast<u8>((v >> 8) & 0xFFu));
+            tiled.push_back(keel::as<u8>(v & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 8) & 0xFFu));
         };
         auto push32 = [&](u32 v) {
-            tiled.push_back(static_cast<u8>(v & 0xFFu));
-            tiled.push_back(static_cast<u8>((v >> 8) & 0xFFu));
-            tiled.push_back(static_cast<u8>((v >> 16) & 0xFFu));
-            tiled.push_back(static_cast<u8>((v >> 24) & 0xFFu));
+            tiled.push_back(keel::as<u8>(v & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 8) & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 16) & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 24) & 0xFFu));
         };
 
         // Header: II, 42, IFD offset patched later
@@ -1144,21 +1144,21 @@ void test_tiff_roundtrips() {
             30, 31, 40, 41, 32, 99, 42, 99, // G
             50, 51, 60, 61, 52, 99, 62, 99, // B
         };
-        const u32 tiles_base = static_cast<u32>(tiled.size()); // 8
+        const u32 tiles_base = keel::as<u32>(tiled.size()); // 8
         tiled.append(ArrayRef<u8>(tile_payload, 24));
 
-        const u32 bps_off = static_cast<u32>(tiled.size());
+        const u32 bps_off = keel::as<u32>(tiled.size());
         push16(8u);
         push16(8u);
         push16(8u);
 
-        const u32 toff_arr = static_cast<u32>(tiled.size());
+        const u32 toff_arr = keel::as<u32>(tiled.size());
         for (u32 i = 0; i < 6u; ++i) push32(tiles_base + i * 4u);
 
-        const u32 tcnt_arr = static_cast<u32>(tiled.size());
+        const u32 tcnt_arr = keel::as<u32>(tiled.size());
         for (u32 i = 0; i < 6u; ++i) push32(4u);
 
-        const u32 ifd_off = static_cast<u32>(tiled.size());
+        const u32 ifd_off = keel::as<u32>(tiled.size());
         std::memcpy(tiled.data() + 4, &ifd_off, 4);
 
         auto add_entry = [&](u16 tag, u16 type, u32 cnt, u32 val) {

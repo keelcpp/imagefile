@@ -126,7 +126,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::EndOfFile;
     }
 
-    const int min_code_size = static_cast<int>(data[pos++]);
+    const int min_code_size = as<int>(data[pos++]);
     if (min_code_size < 2 || min_code_size > 8) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
@@ -167,8 +167,8 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         next_code = end_code + 1;
         for (int i = 0; i < clear_code; ++i) {
             prefix[i] = -1;
-            suffix[i] = static_cast<u8>(i);
-            first_char[i] = static_cast<u8>(i);
+            suffix[i] = as<u8>(i);
+            first_char[i] = as<u8>(i);
         }
     };
     reset_table();
@@ -181,15 +181,15 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     usize bit_pos = 0;
     int prev_code = -1;
 
-    while (bit_pos + static_cast<usize>(code_size) <= total_bits && out_pos < npix) {
+    while (bit_pos + as<usize>(code_size) <= total_bits && out_pos < npix) {
         int code = 0;
         for (int b = 0; b < code_size; ++b) {
-            const usize bp = bit_pos + static_cast<usize>(b);
+            const usize bp = bit_pos + as<usize>(b);
             if (((comp_ptr[bp >> 3] >> (bp & 7u)) & 1u) != 0u) {
                 code |= (1 << b);
             }
         }
-        bit_pos += static_cast<usize>(code_size);
+        bit_pos += as<usize>(code_size);
 
         if (code == clear_code) {
             reset_table();
@@ -223,7 +223,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         }
 
         if (prev_code >= 0 && next_code < 4096) {
-            prefix[next_code] = static_cast<i16>(prev_code);
+            prefix[next_code] = as<i16>(prev_code);
             suffix[next_code] = first_byte;
             first_char[next_code] = first_char[prev_code];
             ++next_code;
@@ -244,8 +244,8 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         img.pixels = keel::move(decoded_indices);
     } else {
         img.pixels = Array<u8>(npix, u8{0}, dst_alloc);
-        const usize w = static_cast<usize>(frame.width);
-        const usize h = static_cast<usize>(frame.height);
+        const usize w = as<usize>(frame.width);
+        const usize h = as<usize>(frame.height);
         constexpr usize kStart[4] = {0, 4, 2, 1};
         constexpr usize kStep[4] = {8, 8, 4, 2};
         usize src_row = 0;
@@ -262,7 +262,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     if (frame.palette_colors > 0 && frame.palette_rgb != nullptr) {
         img.palette = Array<u16>(frame.palette_colors * 3u, u16{0}, dst_alloc);
         for (usize i = 0; i < frame.palette_colors * 3u; ++i) {
-            img.palette[i] = static_cast<u16>(frame.palette_rgb[i]);
+            img.palette[i] = as<u16>(frame.palette_rgb[i]);
         }
         img.palette_bits = 8;
     } else {

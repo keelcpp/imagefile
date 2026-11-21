@@ -16,58 +16,58 @@ namespace keel::imagefile::detail {
 }
 
 [[nodiscard]] constexpr u16 read_u16_le(const u8* p) noexcept {
-    return static_cast<u16>(static_cast<u16>(p[0]) | (static_cast<u16>(p[1]) << 8));
+    return as<u16>(as<u16>(p[0]) | (as<u16>(p[1]) << 8));
 }
 
 [[nodiscard]] constexpr u16 read_u16_be(const u8* p) noexcept {
-    return static_cast<u16>((static_cast<u16>(p[0]) << 8) | static_cast<u16>(p[1]));
+    return as<u16>((as<u16>(p[0]) << 8) | as<u16>(p[1]));
 }
 
 [[nodiscard]] constexpr u32 read_u32_le(const u8* p) noexcept {
-    return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) | (static_cast<u32>(p[2]) << 16) |
-           (static_cast<u32>(p[3]) << 24);
+    return as<u32>(p[0]) | (as<u32>(p[1]) << 8) | (as<u32>(p[2]) << 16) |
+           (as<u32>(p[3]) << 24);
 }
 
 [[nodiscard]] constexpr u32 read_u32_be(const u8* p) noexcept {
-    return (static_cast<u32>(p[0]) << 24) | (static_cast<u32>(p[1]) << 16) | (static_cast<u32>(p[2]) << 8) |
-           static_cast<u32>(p[3]);
+    return (as<u32>(p[0]) << 24) | (as<u32>(p[1]) << 16) | (as<u32>(p[2]) << 8) |
+           as<u32>(p[3]);
 }
 
 [[nodiscard]] constexpr u64 read_u64_le(const u8* p) noexcept {
-    return static_cast<u64>(read_u32_le(p)) | (static_cast<u64>(read_u32_le(p + 4)) << 32);
+    return as<u64>(read_u32_le(p)) | (as<u64>(read_u32_le(p + 4)) << 32);
 }
 
 [[nodiscard]] constexpr u64 read_u64_be(const u8* p) noexcept {
-    return (static_cast<u64>(read_u32_be(p)) << 32) | static_cast<u64>(read_u32_be(p + 4));
+    return (as<u64>(read_u32_be(p)) << 32) | as<u64>(read_u32_be(p + 4));
 }
 
 inline void push_u16_le(Array<u8>& buf, u16 v) {
-    buf.push_back(static_cast<u8>(v & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 8) & 0xFFu));
+    buf.push_back(as<u8>(v & 0xFFu));
+    buf.push_back(as<u8>((v >> 8) & 0xFFu));
 }
 
 inline void push_u16_be(Array<u8>& buf, u16 v) {
-    buf.push_back(static_cast<u8>((v >> 8) & 0xFFu));
-    buf.push_back(static_cast<u8>(v & 0xFFu));
+    buf.push_back(as<u8>((v >> 8) & 0xFFu));
+    buf.push_back(as<u8>(v & 0xFFu));
 }
 
 inline void push_u32_le(Array<u8>& buf, u32 v) {
-    buf.push_back(static_cast<u8>(v & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 8) & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 16) & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 24) & 0xFFu));
+    buf.push_back(as<u8>(v & 0xFFu));
+    buf.push_back(as<u8>((v >> 8) & 0xFFu));
+    buf.push_back(as<u8>((v >> 16) & 0xFFu));
+    buf.push_back(as<u8>((v >> 24) & 0xFFu));
 }
 
 inline void push_u32_be(Array<u8>& buf, u32 v) {
-    buf.push_back(static_cast<u8>((v >> 24) & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 16) & 0xFFu));
-    buf.push_back(static_cast<u8>((v >> 8) & 0xFFu));
-    buf.push_back(static_cast<u8>(v & 0xFFu));
+    buf.push_back(as<u8>((v >> 24) & 0xFFu));
+    buf.push_back(as<u8>((v >> 16) & 0xFFu));
+    buf.push_back(as<u8>((v >> 8) & 0xFFu));
+    buf.push_back(as<u8>(v & 0xFFu));
 }
 
 inline void push_u64_le(Array<u8>& buf, u64 v) {
-    push_u32_le(buf, static_cast<u32>(v & 0xFFFFFFFFULL));
-    push_u32_le(buf, static_cast<u32>((v >> 32) & 0xFFFFFFFFULL));
+    push_u32_le(buf, as<u32>(v & 0xFFFFFFFFULL));
+    push_u32_le(buf, as<u32>((v >> 32) & 0xFFFFFFFFULL));
 }
 
 inline void write_u16_native(u8* dst, u16 v) noexcept { mem_copy(dst, &v, 2); }
@@ -101,8 +101,8 @@ inline u64 read_u64_native(const u8* src) noexcept {
         return ErrorCode::OutOfRange;
     }
 
-    const usize w = static_cast<usize>(width);
-    const usize h = static_cast<usize>(height);
+    const usize w = as<usize>(width);
+    const usize h = as<usize>(height);
     if (w > (~usize{0}) / h) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
@@ -112,7 +112,7 @@ inline u64 read_u64_native(const u8* src) noexcept {
     }
 
     const usize bps = sample_byte_size(sample_type);
-    const usize pixel_bytes = static_cast<usize>(channels) * bps;
+    const usize pixel_bytes = as<usize>(channels) * bps;
     if (pixel_bytes == 0 || num_pixels > (~usize{0}) / pixel_bytes) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
@@ -134,17 +134,17 @@ struct ValidatedView {
         return ErrorCode::InvalidArgument;
     }
     const usize bps = sample_byte_size(view.sample_type);
-    const usize pixel_bytes = static_cast<usize>(view.channels) * bps;
-    if (pixel_bytes == 0 || static_cast<usize>(view.width) > (~usize{0}) / pixel_bytes) [[unlikely]] {
+    const usize pixel_bytes = as<usize>(view.channels) * bps;
+    if (pixel_bytes == 0 || as<usize>(view.width) > (~usize{0}) / pixel_bytes) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
-    const usize tight_row = static_cast<usize>(view.width) * pixel_bytes;
+    const usize tight_row = as<usize>(view.width) * pixel_bytes;
     const usize stride = (view.row_stride_bytes != 0) ? view.row_stride_bytes : tight_row;
     if (stride < tight_row) [[unlikely]] {
         return ErrorCode::InvalidArgument;
     }
 
-    const usize h_minus_1 = static_cast<usize>(view.height) - 1u;
+    const usize h_minus_1 = as<usize>(view.height) - 1u;
     if (h_minus_1 > 0 && stride > ((~usize{0}) - tight_row) / h_minus_1) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
