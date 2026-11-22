@@ -533,6 +533,61 @@ void test_jpeg() {
             }
         }
     }
+
+    // Progressive SOF2 multi-scan JPEG (DC first Al=1 -> DC refine Al=0 -> AC first)
+    {
+        // Single 8x8 grayscale block with uniform Q=16, DC coeff = 3*2 + 1 = 7 ->
+        // dequantized DC = 7*16 = 112 -> spatial = 112/8 + 128 = 142 across all 64 pixels.
+        Array<u8> prog;
+        auto push = [&](const u8* buf, usize n) { prog.append(ArrayRef<u8>(buf, n)); };
+        const u8 soi[2] = {0xFFu, 0xD8u};
+        push(soi, 2);
+        // DQT table 0: all 16
+        u8 dqt[69]{};
+        dqt[0] = 0xFFu; dqt[1] = 0xDBu; dqt[2] = 0x00u; dqt[3] = 67u; dqt[4] = 0x00u;
+        for (usize i = 0; i < 64; ++i) dqt[5 + i] = 16u;
+        push(dqt, 69);
+        // SOF2: 8x8, 1 component (id=1, 1x1, qt=0)
+        const u8 sof2[13] = {
+            0xFFu, 0xC2u, 0x00u, 11u, 8u,
+            0x00u, 8u, 0x00u, 8u, 1u,
+            1u, 0x11u, 0u
+        };
+        push(sof2, 13);
+        // DHT DC table 0: 1-bit code 0 -> symbol 2 (category 2, values -3,-2,+2,+3)
+        const u8 dht_dc[22] = {
+            0xFFu, 0xC4u, 0x00u, 20u, 0x00u,
+            1u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            2u
+        };
+        push(dht_dc, 22);
+        // DHT AC table 0: 1-bit code 0 -> symbol 0x00 (EOB)
+        const u8 dht_ac[22] = {
+            0xFFu, 0xC4u, 0x00u, 20u, 0x10u,
+            1u, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0x00u
+        };
+        push(dht_ac, 22);
+        // Scan 1: DC first (Ss=0, Se=0, Ah=0, Al=1). Code 0 (sym 2) + bits 11 (+3) -> 0b01100000 = 0x60
+        const u8 sos1[11] = {0xFFu, 0xDAu, 0x00u, 8u, 1u, 1u, 0x00u, 0u, 0u, 0x01u, 0x60u};
+        push(sos1, 11);
+        // Scan 2: DC refine (Ss=0, Se=0, Ah=1, Al=0). Bit 1 -> 0b10000000 = 0x80 (DC becomes 6+1=7)
+        const u8 sos2[11] = {0xFFu, 0xDAu, 0x00u, 8u, 1u, 1u, 0x00u, 0u, 0u, 0x10u, 0x80u};
+        push(sos2, 11);
+        // Scan 3: AC first (Ss=1, Se=63, Ah=0, Al=0). Code 0 (EOB) -> 0x00
+        const u8 sos3[11] = {0xFFu, 0xDAu, 0x00u, 8u, 1u, 1u, 0x00u, 1u, 63u, 0x00u, 0x00u};
+        push(sos3, 11);
+        const u8 eoi[2] = {0xFFu, 0xD9u};
+        push(eoi, 2);
+
+        auto dec_prog = decode_jpeg(prog);
+        TEST_CHECK(dec_prog.is_ok() && dec_prog->width == 8u && dec_prog->height == 8u && dec_prog->channels == 1u);
+        if (dec_prog) {
+            for (usize i = 0; i < 64u; ++i) {
+                TEST_CHECK(std::abs(keel::as<int>(dec_prog->pixels[i]) - 142) <= 1);
+            }
+        }
+    }
 }
 
 // ============================================================================

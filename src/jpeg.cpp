@@ -216,6 +216,33 @@ public:
         m_bit_count = 0;
     }
 
+    [[nodiscard]] usize next_marker_offset() const noexcept {
+        if (m_hit_marker) {
+            return m_marker_pos;
+        }
+        const usize unread_bytes = as<usize>(m_bit_count / 8);
+        usize pos = (m_pos > unread_bytes) ? (m_pos - unread_bytes) : 0;
+        while (pos + 1 < m_len) {
+            if (m_data[pos] == 0xFFu) {
+                usize q = pos + 1;
+                while (q < m_len && m_data[q] == 0xFFu) {
+                    ++q;
+                }
+                if (q >= m_len) {
+                    return m_len;
+                }
+                const u8 m = m_data[q];
+                if (m == 0x00u || (m >= 0xD0u && m <= 0xD7u)) {
+                    pos = q + 1;
+                    continue;
+                }
+                return pos;
+            }
+            ++pos;
+        }
+        return m_len;
+    }
+
     [[nodiscard]] u32 get_bits(i32 n) noexcept {
         if (n <= 0) return 0;
         while (m_bit_count < n) {
@@ -224,6 +251,7 @@ public:
                 m_bit_count += 8;
                 continue;
             }
+            const usize byte_pos = m_pos;
             u8 b = m_data[m_pos++];
             if (b == 0xFFu) {
                 while (m_pos < m_len && m_data[m_pos] == 0xFFu) {
@@ -238,10 +266,10 @@ public:
                     } else if (marker >= 0xD0u && marker <= 0xD7u) {
                         // Restart marker: skip and fetch next stream byte cleanly.
                         continue;
-                    } else if (marker == 0xD9u) {
-                        m_pos = m_len;
-                        b = 0;
                     } else {
+                        m_hit_marker = true;
+                        m_marker_pos = byte_pos;
+                        m_pos = m_len;
                         b = 0;
                     }
                 }
@@ -285,7 +313,98 @@ private:
     usize m_pos = 0;
     u64 m_bit_buf = 0;
     i32 m_bit_count = 0;
+    bool m_hit_marker = false;
+    usize m_marker_pos = 0;
 };
+
+void decode_prog_dc_first(JpegBitReader& reader, const DecHuffTable& dc_ht, i32& last_dc, i16 blk[64],
+                          i32 al) noexcept {
+    const i32 cat = reader.decode_symbol(dc_ht);
+    const i32 diff = reader.decode_value(cat);
+    last_dc += diff;
+    blk[0] = as<i16>(last_dc << al);
+}
+
+void decode_prog_dc_refine(JpegBitReader& reader, i16 blk[64], i32 al) noexcept {
+    if (reader.get_bits(1) != 0u) {
+        blk[0] = as<i16>(blk[0] + (1 << al));
+    }
+}
+
+void decode_prog_ac_first(JpegBitReader& reader, const DecHuffTable& ac_ht, i16 blk[64], i32 ss, i32 se, i32 al,
+                          i32& eobrun) noexcept {
+    if (eobrun > 0) {
+        --eobrun;
+        return;
+    }
+    i32 k = ss;
+    while (k <= se) {
+        const i32 sym = reader.decode_symbol(ac_ht);
+        const i32 r = (sym >> 4) & 0x0F;
+        const i32 s = sym & 0x0F;
+        if (s == 0) {
+            if (r == 15) {
+                k += 16;
+            } else {
+                eobrun = (1 << r) + as<i32>(reader.get_bits(r)) - 1;
+                break;
+            }
+        } else {
+            k += r;
+            if (k > se) break;
+            const i32 val = reader.decode_value(s);
+            blk[k] = as<i16>(val << al);
+            ++k;
+        }
+    }
+}
+
+void decode_prog_ac_refine(JpegBitReader& reader, const DecHuffTable& ac_ht, i16 blk[64], i32 ss, i32 se, i32 al,
+                           i32& eobrun) noexcept {
+    const i16 p1 = as<i16>(1 << al);
+    const i16 m1 = as<i16>(-p1);
+    i32 k = ss;
+    if (eobrun == 0) {
+        while (k <= se) {
+            const i32 sym = reader.decode_symbol(ac_ht);
+            i32 r = (sym >> 4) & 0x0F;
+            const i32 s = sym & 0x0F;
+            i16 new_val = 0;
+            if (s == 0) {
+                if (r != 15) {
+                    eobrun = (1 << r) + as<i32>(reader.get_bits(r));
+                    break;
+                }
+            } else {
+                new_val = (reader.get_bits(1) != 0u) ? p1 : m1;
+            }
+            while (k <= se) {
+                if (blk[k] != 0) {
+                    if (reader.get_bits(1) != 0u) {
+                        blk[k] = as<i16>(blk[k] + ((blk[k] > 0) ? p1 : m1));
+                    }
+                } else {
+                    if (r == 0) break;
+                    --r;
+                }
+                ++k;
+            }
+            if (s != 0 && k <= se) {
+                blk[k] = new_val;
+            }
+            ++k;
+        }
+    }
+    if (eobrun > 0) {
+        while (k <= se) {
+            if (blk[k] != 0 && reader.get_bits(1) != 0u) {
+                blk[k] = as<i16>(blk[k] + ((blk[k] > 0) ? p1 : m1));
+            }
+            ++k;
+        }
+        --eobrun;
+    }
+}
 
 void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuffTable& ac_ht, const u16 q_table[64],
                   i32& last_dc, f32 out_spatial[64]) noexcept {
@@ -542,6 +661,16 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     u16 bits = 0;
     u16 channels = 0;
     bool saw_sof = false;
+    bool is_progressive = false;
+    bool prog_allocated = false;
+    bool saw_prog_scan = false;
+    u32 prog_max_h = 1;
+    u32 prog_max_v = 1;
+    u32 prog_mcu_cols = 0;
+    u32 prog_mcu_rows = 0;
+    u32 prog_blocks_w[3]{};
+    u32 prog_blocks_h[3]{};
+    Array<i16> prog_coefs[3];
     ComponentInfo comps[3]{};
 
     u16 q_tables[4][64]{};
@@ -563,6 +692,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             ++p;
         }
         if (p >= len) [[unlikely]] {
+            if (is_progressive && saw_prog_scan) break;
             return ErrorCode::EndOfFile;
         }
         const u8 marker = data[p++];
@@ -570,7 +700,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         if (jpeg_impl::is_standalone_marker(marker)) {
             continue;
         }
-        if (marker == 0xD9u) [[unlikely]] {
+        if (marker == 0xD9u) {
+            if (is_progressive && saw_prog_scan) {
+                break;
+            }
             return ErrorCode::InvalidData; // EOI before SOS
         }
         if (jpeg_impl::is_unsupported_sof_marker(marker)) [[unlikely]] {
@@ -593,8 +726,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
         if (jpeg_impl::is_sof_marker(marker)) {
             if (marker == 0xC2u) {
-                // Progressive multi-scan SOF2 is only supported when single-scan compatible;
-                // accept header here and decode scan below.
+                is_progressive = true;
             }
             if (payload_len < 6) [[unlikely]] {
                 return ErrorCode::InvalidData;
@@ -636,9 +768,11 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 return ErrorCode::InvalidData;
             }
             const u8 num_scan_comps = seg[0];
-            if (num_scan_comps == 0 || payload_len < 1u + as<usize>(num_scan_comps) * 2u + 3u) [[unlikely]] {
+            if (num_scan_comps == 0 || num_scan_comps > channels ||
+                payload_len < 1u + as<usize>(num_scan_comps) * 2u + 3u) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
+            u16 scan_comp_idx[3]{};
             for (u8 j = 0; j < num_scan_comps; ++j) {
                 const u8 comp_id = seg[1 + j * 2];
                 const u8 td_ta = seg[2 + j * 2];
@@ -647,16 +781,137 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 if (dc_id >= 4 || ac_id >= 4) [[unlikely]] {
                     return ErrorCode::InvalidData;
                 }
+                bool matched = false;
                 for (u16 ci = 0; ci < channels; ++ci) {
                     if (comps[ci].id == comp_id) {
                         comps[ci].dc_table_id = dc_id;
                         comps[ci].ac_table_id = ac_id;
+                        scan_comp_idx[j] = ci;
+                        matched = true;
                         break;
                     }
                 }
+                if (!matched) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
             }
-            sos_offset = p + seg_len;
-            break;
+            if (!is_progressive) {
+                sos_offset = p + seg_len;
+                break;
+            }
+
+            const i32 ss = seg[1u + as<usize>(num_scan_comps) * 2u];
+            const i32 se = seg[2u + as<usize>(num_scan_comps) * 2u];
+            const u8 ah_al = seg[3u + as<usize>(num_scan_comps) * 2u];
+            const i32 ah = (ah_al >> 4) & 0x0F;
+            const i32 al = ah_al & 0x0F;
+            if (ss > se || se >= 64) [[unlikely]] {
+                return ErrorCode::InvalidData;
+            }
+
+            if (!prog_allocated) {
+                KEEL_TRY_ASSIGN(const usize unused_total,
+                                detail::validate_decode_allocation(width, height, channels, SampleType::U8, opts));
+                (void)unused_total;
+                prog_max_h = 1;
+                prog_max_v = 1;
+                for (u16 ci = 0; ci < channels; ++ci) {
+                    if (comps[ci].h_samp > prog_max_h) prog_max_h = comps[ci].h_samp;
+                    if (comps[ci].v_samp > prog_max_v) prog_max_v = comps[ci].v_samp;
+                }
+                const u32 mcu_w = prog_max_h * 8u;
+                const u32 mcu_h = prog_max_v * 8u;
+                prog_mcu_cols = (width + mcu_w - 1u) / mcu_w;
+                prog_mcu_rows = (height + mcu_h - 1u) / mcu_h;
+                for (u16 ci = 0; ci < channels; ++ci) {
+                    prog_blocks_w[ci] = prog_mcu_cols * comps[ci].h_samp;
+                    prog_blocks_h[ci] = prog_mcu_rows * comps[ci].v_samp;
+                    const usize n_coefs = as<usize>(prog_blocks_w[ci]) * as<usize>(prog_blocks_h[ci]) * 64u;
+                    prog_coefs[ci] = Array<i16>(n_coefs, i16{0}, opts.allocator);
+                }
+                prog_allocated = true;
+            }
+
+            for (i32 ti = 0; ti < 4; ++ti) {
+                if (dc_huff[ti].populated && !dc_huff[ti].build()) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+                if (ac_huff[ti].populated && !ac_huff[ti].build()) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+            }
+
+            const usize scan_start = p + seg_len;
+            if (scan_start >= len) [[unlikely]] {
+                return ErrorCode::EndOfFile;
+            }
+            jpeg_impl::JpegBitReader reader(data + scan_start, len - scan_start);
+            i32 last_dc[3] = {0, 0, 0};
+            i32 eobrun = 0;
+            usize mcu_count = 0;
+
+            if (num_scan_comps == 1) {
+                const u16 ci = scan_comp_idx[0];
+                const ComponentInfo& c = comps[ci];
+                const u32 bw_real = (width * c.h_samp + prog_max_h * 8u - 1u) / (prog_max_h * 8u);
+                const u32 bh_real = (height * c.v_samp + prog_max_v * 8u - 1u) / (prog_max_v * 8u);
+                for (u32 by = 0; by < bh_real; ++by) {
+                    for (u32 bx = 0; bx < bw_real; ++bx) {
+                        if (restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
+                            reader.align_byte();
+                            last_dc[0] = last_dc[1] = last_dc[2] = 0;
+                            eobrun = 0;
+                        }
+                        i16* blk = prog_coefs[ci].data() +
+                                   (as<usize>(by) * as<usize>(prog_blocks_w[ci]) + as<usize>(bx)) * 64u;
+                        if (ss == 0) {
+                            if (ah == 0) {
+                                jpeg_impl::decode_prog_dc_first(reader, dc_huff[c.dc_table_id], last_dc[ci], blk, al);
+                            } else {
+                                jpeg_impl::decode_prog_dc_refine(reader, blk, al);
+                            }
+                        } else {
+                            if (ah == 0) {
+                                jpeg_impl::decode_prog_ac_first(reader, ac_huff[c.ac_table_id], blk, ss, se, al, eobrun);
+                            } else {
+                                jpeg_impl::decode_prog_ac_refine(reader, ac_huff[c.ac_table_id], blk, ss, se, al, eobrun);
+                            }
+                        }
+                        ++mcu_count;
+                    }
+                }
+            } else {
+                for (u32 my = 0; my < prog_mcu_rows; ++my) {
+                    for (u32 mx = 0; mx < prog_mcu_cols; ++mx) {
+                        if (restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
+                            reader.align_byte();
+                            last_dc[0] = last_dc[1] = last_dc[2] = 0;
+                            eobrun = 0;
+                        }
+                        for (u8 j = 0; j < num_scan_comps; ++j) {
+                            const u16 ci = scan_comp_idx[j];
+                            const ComponentInfo& c = comps[ci];
+                            for (u32 v = 0; v < c.v_samp; ++v) {
+                                for (u32 h = 0; h < c.h_samp; ++h) {
+                                    const usize by = as<usize>(my) * c.v_samp + v;
+                                    const usize bx = as<usize>(mx) * c.h_samp + h;
+                                    i16* blk = prog_coefs[ci].data() + (by * prog_blocks_w[ci] + bx) * 64u;
+                                    if (ah == 0) {
+                                        jpeg_impl::decode_prog_dc_first(reader, dc_huff[c.dc_table_id], last_dc[ci],
+                                                                        blk, al);
+                                    } else {
+                                        jpeg_impl::decode_prog_dc_refine(reader, blk, al);
+                                    }
+                                }
+                            }
+                        }
+                        ++mcu_count;
+                    }
+                }
+            }
+            saw_prog_scan = true;
+            p = scan_start + reader.next_marker_offset();
+            continue;
         } else if (marker == 0xDDu) { // DRI
             if (payload_len < 2) [[unlikely]] {
                 return ErrorCode::InvalidData;
@@ -725,10 +980,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         p += seg_len;
     }
 
-    if (!saw_sof || sos_offset == 0) [[unlikely]] {
+    if (!saw_sof || (!is_progressive && sos_offset == 0) || (is_progressive && !saw_prog_scan)) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
-    if (sos_offset >= len) [[unlikely]] {
+    if (!is_progressive && sos_offset >= len) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
 
@@ -754,29 +1009,31 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         }
     }
 
-    if (!dc_huff[0].populated) {
-        dc_huff[0].set_default(jpeg_impl::kDcBitsLuma, jpeg_impl::kDcValLuma, sizeof(jpeg_impl::kDcValLuma));
-    }
-    if (!dc_huff[1].populated) {
-        dc_huff[1].set_default(jpeg_impl::kDcBitsChroma, jpeg_impl::kDcValChroma, sizeof(jpeg_impl::kDcValChroma));
-    }
-    if (!ac_huff[0].populated) {
-        ac_huff[0].set_default(jpeg_impl::kAcBitsLuma, jpeg_impl::kAcValLuma, sizeof(jpeg_impl::kAcValLuma));
-    }
-    if (!ac_huff[1].populated) {
-        ac_huff[1].set_default(jpeg_impl::kAcBitsChroma, jpeg_impl::kAcValChroma, sizeof(jpeg_impl::kAcValChroma));
-    }
-    for (i32 i = 0; i < 4; ++i) {
-        if (dc_huff[i].populated && !dc_huff[i].build()) [[unlikely]] {
-            return ErrorCode::InvalidData;
+    if (!is_progressive) {
+        if (!dc_huff[0].populated) {
+            dc_huff[0].set_default(jpeg_impl::kDcBitsLuma, jpeg_impl::kDcValLuma, sizeof(jpeg_impl::kDcValLuma));
         }
-        if (ac_huff[i].populated && !ac_huff[i].build()) [[unlikely]] {
-            return ErrorCode::InvalidData;
+        if (!dc_huff[1].populated) {
+            dc_huff[1].set_default(jpeg_impl::kDcBitsChroma, jpeg_impl::kDcValChroma, sizeof(jpeg_impl::kDcValChroma));
         }
-    }
-    for (u16 ci = 0; ci < channels; ++ci) {
-        if (!dc_huff[comps[ci].dc_table_id].populated || !ac_huff[comps[ci].ac_table_id].populated) [[unlikely]] {
-            return ErrorCode::InvalidData;
+        if (!ac_huff[0].populated) {
+            ac_huff[0].set_default(jpeg_impl::kAcBitsLuma, jpeg_impl::kAcValLuma, sizeof(jpeg_impl::kAcValLuma));
+        }
+        if (!ac_huff[1].populated) {
+            ac_huff[1].set_default(jpeg_impl::kAcBitsChroma, jpeg_impl::kAcValChroma, sizeof(jpeg_impl::kAcValChroma));
+        }
+        for (i32 i = 0; i < 4; ++i) {
+            if (dc_huff[i].populated && !dc_huff[i].build()) [[unlikely]] {
+                return ErrorCode::InvalidData;
+            }
+            if (ac_huff[i].populated && !ac_huff[i].build()) [[unlikely]] {
+                return ErrorCode::InvalidData;
+            }
+        }
+        for (u16 ci = 0; ci < channels; ++ci) {
+            if (!dc_huff[comps[ci].dc_table_id].populated || !ac_huff[comps[ci].ac_table_id].populated) [[unlikely]] {
+                return ErrorCode::InvalidData;
+            }
         }
     }
 
@@ -806,12 +1063,13 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     f32 mcu_planes[3][32 * 32]{};
     i32 last_dc[3] = {0, 0, 0};
 
-    jpeg_impl::JpegBitReader reader(data + sos_offset, len - sos_offset);
+    jpeg_impl::JpegBitReader reader(is_progressive ? nullptr : (data + sos_offset),
+                                    is_progressive ? 0u : (len - sos_offset));
     usize mcu_count = 0;
 
     for (u32 my = 0; my < mcu_rows; ++my) {
         for (u32 mx = 0; mx < mcu_cols; ++mx) {
-            if (restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
+            if (!is_progressive && restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
                 reader.align_byte();
                 last_dc[0] = 0;
                 last_dc[1] = 0;
@@ -825,8 +1083,20 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 for (u32 v = 0; v < c.v_samp; ++v) {
                     for (u32 h = 0; h < c.h_samp; ++h) {
                         f32 spatial[64];
-                        jpeg_impl::decode_block(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
-                                                q_tables[c.q_table_id], last_dc[ci], spatial);
+                        if (is_progressive) {
+                            const usize by_blk = as<usize>(my) * c.v_samp + v;
+                            const usize bx_blk = as<usize>(mx) * c.h_samp + h;
+                            const i16* blk = prog_coefs[ci].data() + (by_blk * prog_blocks_w[ci] + bx_blk) * 64u;
+                            f32 freq[64]{};
+                            const u16* qt = q_tables[c.q_table_id];
+                            for (i32 k = 0; k < 64; ++k) {
+                                freq[jpeg_impl::kZigzag[k]] = as<f32>(as<i32>(blk[k]) * as<i32>(qt[k]));
+                            }
+                            jpeg_impl::idct8x8(freq, spatial);
+                        } else {
+                            jpeg_impl::decode_block(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
+                                                    q_tables[c.q_table_id], last_dc[ci], spatial);
+                        }
                         const u32 br = v * 8u;
                         const u32 bc = h * 8u;
                         for (u32 by = 0; by < 8u; ++by) {
