@@ -333,11 +333,11 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         if (pw == 0u || ph == 0u) continue;
 
         const usize row_bytes = (pw * bits_per_pixel + 7u) / 8u;
-        if (row_bytes + 1u > (~usize{0}) / ph) [[unlikely]] {
+        if (row_bytes + 1u > Limits<usize>::kMax / ph) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         const usize pass_raw = (row_bytes + 1u) * ph;
-        if (expected_raw_bytes > (~usize{0}) - pass_raw) [[unlikely]] {
+        if (expected_raw_bytes > Limits<usize>::kMax - pass_raw) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         expected_raw_bytes += pass_raw;
@@ -444,7 +444,7 @@ Result<Array<u8>> encode_png(const ImageView& view, const PngEncodeOptions& opts
     const usize row_bytes = vv.tight_row_bytes;
     const usize bpp = as<usize>(view.channels) * (is_16bit ? 2u : 1u);
 
-    if (row_bytes + 1u > (~usize{0}) / h) [[unlikely]] {
+    if (row_bytes + 1u > Limits<usize>::kMax / h) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
 

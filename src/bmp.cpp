@@ -254,7 +254,7 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     }
 
     const usize row_stride = ((w * as<usize>(hdr.bit_count) + 31u) / 32u) * 4u;
-    if (row_stride > 0 && h > (~usize{0}) / row_stride) [[unlikely]] {
+    if (row_stride > 0 && h > Limits<usize>::kMax / row_stride) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     if (pixel_data_len < row_stride * h) [[unlikely]] {

@@ -1234,7 +1234,7 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         const usize tl = timg.tile_length;
         const usize tiles_across = (W + tw - 1u) / tw;
         const usize tiles_down = (H + tl - 1u) / tl;
-        if (tiles_across > (~usize{0}) / tiles_down) [[unlikely]] {
+        if (tiles_across > Limits<usize>::kMax / tiles_down) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         const usize tiles_per_plane = tiles_across * tiles_down;
@@ -1245,7 +1245,7 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
         const usize src_stride =
             subbyte ? ((tw * timg.bits_per_sample + 7u) / 8u) : (tw * spp_block * bps);
-        if (src_stride > 0 && tl > (~usize{0}) / src_stride) [[unlikely]] {
+        if (src_stride > 0 && tl > Limits<usize>::kMax / src_stride) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         const usize tile_bytes = src_stride * tl;
@@ -1382,7 +1382,7 @@ Result<Array<u8>> encode_tiff(const ImageView& view, const TiffEncodeOptions& op
     const usize S = view.channels;
     const usize bps = spec.bytes_per_sample;
     const usize tight_row = vv.tight_row_bytes;
-    if (H > (~usize{0}) / tight_row) [[unlikely]] {
+    if (H > Limits<usize>::kMax / tight_row) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     const usize raw_total = H * tight_row;

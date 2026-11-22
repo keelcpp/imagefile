@@ -109,7 +109,7 @@ Result<Image> expand_palette(const Image& indexed, Allocator* alloc) {
     Allocator* dst_alloc = alloc ? alloc : indexed.pixels.allocator();
     const SampleType out_type = (indexed.palette_bits == 16) ? SampleType::U16 : SampleType::U8;
     const usize out_bps = sample_byte_size(out_type);
-    if (num_pixels > (~usize{0}) / (3u * out_bps)) [[unlikely]] {
+    if (num_pixels > Limits<usize>::kMax / (3u * out_bps)) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
 

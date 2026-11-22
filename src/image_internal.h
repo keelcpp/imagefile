@@ -103,7 +103,7 @@ inline u64 read_u64_native(const u8* src) noexcept {
 
     const usize w = as<usize>(width);
     const usize h = as<usize>(height);
-    if (w > (~usize{0}) / h) [[unlikely]] {
+    if (w > Limits<usize>::kMax / h) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     const usize num_pixels = w * h;
@@ -113,7 +113,7 @@ inline u64 read_u64_native(const u8* src) noexcept {
 
     const usize bps = sample_byte_size(sample_type);
     const usize pixel_bytes = as<usize>(channels) * bps;
-    if (pixel_bytes == 0 || num_pixels > (~usize{0}) / pixel_bytes) [[unlikely]] {
+    if (pixel_bytes == 0 || num_pixels > Limits<usize>::kMax / pixel_bytes) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     const usize total_bytes = num_pixels * pixel_bytes;
@@ -135,7 +135,7 @@ struct ValidatedView {
     }
     const usize bps = sample_byte_size(view.sample_type);
     const usize pixel_bytes = as<usize>(view.channels) * bps;
-    if (pixel_bytes == 0 || as<usize>(view.width) > (~usize{0}) / pixel_bytes) [[unlikely]] {
+    if (pixel_bytes == 0 || as<usize>(view.width) > Limits<usize>::kMax / pixel_bytes) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     const usize tight_row = as<usize>(view.width) * pixel_bytes;
@@ -145,7 +145,7 @@ struct ValidatedView {
     }
 
     const usize h_minus_1 = as<usize>(view.height) - 1u;
-    if (h_minus_1 > 0 && stride > ((~usize{0}) - tight_row) / h_minus_1) [[unlikely]] {
+    if (h_minus_1 > 0 && stride > (Limits<usize>::kMax - tight_row) / h_minus_1) [[unlikely]] {
         return ErrorCode::OutOfRange;
     }
     const usize required = h_minus_1 * stride + tight_row;
