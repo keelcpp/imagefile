@@ -1,11 +1,10 @@
 #include "keel/imagefile.h"
 
 #include "keel/arena.h"
+#include "keel/format.h"
 #include "keel/fs.h"
-
-#include <cmath>
-#include <cstdio>
-#include <cstring>
+#include "keel/math.h"
+#include "keel/memory.h"
 
 using namespace keel;
 using namespace keel::imagefile;
@@ -16,13 +15,13 @@ using namespace keel::imagefile;
 
 namespace {
 
-int g_tests_passed = 0;
-int g_tests_failed = 0;
+i32 g_tests_passed = 0;
+i32 g_tests_failed = 0;
 
 #define TEST_CHECK(cond)                                                                                               \
     do {                                                                                                               \
         if (!(cond)) {                                                                                                 \
-            std::fprintf(stderr, "FAIL: %s (%s:%d)\n", #cond, __FILE__, __LINE__);                                     \
+            keel::eprintln("FAIL: {} ({}:{})", #cond, __FILE__, __LINE__);                                             \
             ++g_tests_failed;                                                                                          \
         } else {                                                                                                       \
             ++g_tests_passed;                                                                                          \
@@ -35,7 +34,7 @@ u32 test_crc32(const u8* data, usize len) noexcept {
     u32 c = 0xFFFFFFFFu;
     for (usize i = 0; i < len; ++i) {
         c ^= data[i];
-        for (int b = 0; b < 8; ++b) {
+        for (i32 b = 0; b < 8; ++b) {
             c = (c >> 1) ^ ((c & 1u) ? 0xEDB88320u : 0u);
         }
     }
@@ -89,7 +88,7 @@ void append_png_chunk(Array<u8>& png, const char type[4], ArrayRef<u8> payload) 
     png.push_back(keel::as<u8>(len & 0xFFu));
 
     const usize type_start = png.size();
-    for (int i = 0; i < 4; ++i) {
+    for (i32 i = 0; i < 4; ++i) {
         png.push_back(keel::as<u8>(type[i]));
     }
     png.append(payload);
@@ -149,37 +148,37 @@ Image make_test_imagefile(u32 w, u32 h, u16 ch, SampleType st) {
             }
             case SampleType::U16: {
                 const u16 v = keel::as<u16>((i * 257u + (rng >> 16)) & 0xFFFFu);
-                std::memcpy(p + i * 2u, &v, 2);
+                keel::mem_copy(p + i * 2u, &v, 2);
                 break;
             }
             case SampleType::U32: {
                 const u32 v = rng ^ keel::as<u32>(i * 65537u);
-                std::memcpy(p + i * 4u, &v, 4);
+                keel::mem_copy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::I8: {
-                const i8 v = keel::as<i8>(keel::as<int>((i * 19u + (rng >> 24)) & 0xFFu) - 128);
-                std::memcpy(p + i, &v, 1);
+                const i8 v = keel::as<i8>(keel::as<i32>((i * 19u + (rng >> 24)) & 0xFFu) - 128);
+                keel::mem_copy(p + i, &v, 1);
                 break;
             }
             case SampleType::I16: {
-                const i16 v = keel::as<i16>(keel::as<int>((i * 521u + (rng >> 16)) & 0xFFFFu) - 32768);
-                std::memcpy(p + i * 2u, &v, 2);
+                const i16 v = keel::as<i16>(keel::as<i32>((i * 521u + (rng >> 16)) & 0xFFFFu) - 32768);
+                keel::mem_copy(p + i * 2u, &v, 2);
                 break;
             }
             case SampleType::I32: {
                 const i32 v = keel::as<i32>(rng) - 1000000000;
-                std::memcpy(p + i * 4u, &v, 4);
+                keel::mem_copy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::F32: {
-                const float v = keel::as<float>(keel::as<int>(rng & 0xFFFFu) - 32768) * 0.03125f;
-                std::memcpy(p + i * 4u, &v, 4);
+                const f32 v = keel::as<f32>(keel::as<i32>(rng & 0xFFFFu) - 32768) * 0.03125f;
+                keel::mem_copy(p + i * 4u, &v, 4);
                 break;
             }
             case SampleType::F64: {
-                const double v = keel::as<double>(keel::as<int>(rng & 0xFFFFFFu) - 8388608) * 0.0001220703125;
-                std::memcpy(p + i * 8u, &v, 8);
+                const f64 v = keel::as<f64>(keel::as<i32>(rng & 0xFFFFFFu) - 8388608) * 0.0001220703125;
+                keel::mem_copy(p + i * 8u, &v, 8);
                 break;
             }
         }
@@ -196,7 +195,7 @@ void test_png() {
     for (SampleType st : {SampleType::U8, SampleType::U16}) {
         for (u16 ch : {u16{1}, u16{2}, u16{3}, u16{4}}) {
             Image src = make_test_imagefile(19, 13, ch, st);
-            for (int lvl : {0, 6}) {
+            for (i32 lvl : {0, 6}) {
                 auto enc = encode_png(src, PngEncodeOptions{.compression_level = lvl});
                 TEST_CHECK(enc.is_ok());
                 if (!enc) continue;
@@ -286,11 +285,11 @@ void test_png() {
         }
         const usize row_b = W * 3u;
         Array<u8> raw;
-        auto paeth = [](int a, int b, int c) -> u8 {
-            const int p = a + b - c;
-            const int pa = (p >= a) ? (p - a) : (a - p);
-            const int pb = (p >= b) ? (p - b) : (b - p);
-            const int pc = (p >= c) ? (p - c) : (c - p);
+        auto paeth = [](i32 a, i32 b, i32 c) -> u8 {
+            const i32 p = a + b - c;
+            const i32 pa = (p >= a) ? (p - a) : (a - p);
+            const i32 pb = (p >= b) ? (p - b) : (b - p);
+            const i32 pc = (p >= c) ? (p - c) : (c - p);
             if (pa <= pb && pa <= pc) return keel::as<u8>(a);
             if (pb <= pc) return keel::as<u8>(b);
             return keel::as<u8>(c);
@@ -307,7 +306,7 @@ void test_png() {
                 u8 pred = 0;
                 if (ftype == 1) pred = a;
                 else if (ftype == 2) pred = b;
-                else if (ftype == 3) pred = keel::as<u8>((keel::as<int>(a) + keel::as<int>(b)) >> 1);
+                else if (ftype == 3) pred = keel::as<u8>((keel::as<i32>(a) + keel::as<i32>(b)) >> 1);
                 else if (ftype == 4) pred = paeth(a, b, c);
                 raw.push_back(keel::as<u8>(cur[x] - pred));
             }
@@ -329,7 +328,7 @@ void test_png() {
         const u32 dy[7] = {8, 8, 8, 4, 4, 2, 2};
 
         Array<u8> raw;
-        for (int p = 0; p < 7; ++p) {
+        for (i32 p = 0; p < 7; ++p) {
             if (x0[p] >= W || y0[p] >= H) continue;
             for (u32 y = y0[p]; y < H; y += dy[p]) {
                 raw.push_back(0u); // Filter = None
@@ -422,14 +421,14 @@ void test_jpeg() {
             auto dec_lo = decode_jpeg(*lo);
             TEST_CHECK(dec_hi.is_ok() && dec_lo.is_ok());
             if (dec_hi && dec_lo) {
-                double err_hi = 0.0;
-                double err_lo = 0.0;
+                f64 err_hi = 0.0;
+                f64 err_lo = 0.0;
                 for (usize i = 0; i < grad.pixels.size(); ++i) {
-                    err_hi += std::fabs(keel::as<double>(grad.pixels[i]) - keel::as<double>(dec_hi->pixels[i]));
-                    err_lo += std::fabs(keel::as<double>(grad.pixels[i]) - keel::as<double>(dec_lo->pixels[i]));
+                    err_hi += keel::abs(keel::as<f64>(grad.pixels[i]) - keel::as<f64>(dec_hi->pixels[i]));
+                    err_lo += keel::abs(keel::as<f64>(grad.pixels[i]) - keel::as<f64>(dec_lo->pixels[i]));
                 }
-                err_hi /= keel::as<double>(grad.pixels.size());
-                err_lo /= keel::as<double>(grad.pixels.size());
+                err_hi /= keel::as<f64>(grad.pixels.size());
+                err_lo /= keel::as<f64>(grad.pixels.size());
                 TEST_CHECK(err_hi < 2.5);
                 TEST_CHECK(err_hi < err_lo);
             }
@@ -453,7 +452,7 @@ void test_jpeg() {
                 TEST_CHECK(dec.is_ok() && dec->width == wh[0] && dec->height == wh[1] && dec->channels == ch);
                 if (dec) {
                     for (usize i = 0; i < dec->pixels.size(); ++i) {
-                        const int diff = keel::as<int>(dec->pixels[i]) - 120;
+                        const i32 diff = keel::as<i32>(dec->pixels[i]) - 120;
                         TEST_CHECK(diff >= -3 && diff <= 3);
                     }
                 }
@@ -528,8 +527,8 @@ void test_jpeg() {
             auto dec_rst = decode_jpeg(rst_jpeg);
             TEST_CHECK(dec_rst.is_ok() && dec_rst->width == 16u && dec_rst->height == 8u);
             if (dec_rst) {
-                TEST_CHECK(std::abs(keel::as<int>(dec_rst->pixels[0]) - 64) <= 2);
-                TEST_CHECK(std::abs(keel::as<int>(dec_rst->pixels[15]) - 192) <= 2);
+                TEST_CHECK(keel::abs(keel::as<i32>(dec_rst->pixels[0]) - 64) <= 2);
+                TEST_CHECK(keel::abs(keel::as<i32>(dec_rst->pixels[15]) - 192) <= 2);
             }
         }
     }
@@ -584,7 +583,7 @@ void test_jpeg() {
         TEST_CHECK(dec_prog.is_ok() && dec_prog->width == 8u && dec_prog->height == 8u && dec_prog->channels == 1u);
         if (dec_prog) {
             for (usize i = 0; i < 64u; ++i) {
-                TEST_CHECK(std::abs(keel::as<int>(dec_prog->pixels[i]) - 142) <= 1);
+                TEST_CHECK(keel::abs(keel::as<i32>(dec_prog->pixels[i]) - 142) <= 1);
             }
         }
     }
@@ -643,7 +642,7 @@ void test_bmp() {
         };
         bmp.append(ArrayRef<u8>(rle_stream, sizeof(rle_stream)));
         const u32 file_sz = keel::as<u32>(bmp.size());
-        std::memcpy(bmp.data() + 2, &file_sz, 4);
+        keel::mem_copy(bmp.data() + 2, &file_sz, 4);
 
         auto dec = decode_bmp(bmp);
         TEST_CHECK(dec.is_ok() && dec->width == 4u && dec->height == 2u && dec->channels == 3u);
@@ -767,7 +766,7 @@ void test_pnm() {
     // ASCII P1, P2 (with '#' comments), and P3.
     {
         const char* p1 = "P1\n# PBM comment\n3 2\n1 0 1\n0 1 0\n";
-        auto d1 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p1), std::strlen(p1)));
+        auto d1 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p1), StringRef(p1).size()));
         TEST_CHECK(d1.is_ok() && d1->width == 3u && d1->height == 2u);
         if (d1) {
             TEST_CHECK(d1->pixels[0] == 0u && d1->pixels[1] == 255u && d1->pixels[2] == 0u);
@@ -775,14 +774,14 @@ void test_pnm() {
         }
 
         const char* p2 = "P2\n# Comment 1\n2 # inline comment\n2\n10\n0 5\n10 2\n";
-        auto d2 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p2), std::strlen(p2)));
+        auto d2 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p2), StringRef(p2).size()));
         TEST_CHECK(d2.is_ok() && d2->width == 2u && d2->height == 2u);
         if (d2) {
             TEST_CHECK(d2->pixels[0] == 0u && d2->pixels[1] == 128u && d2->pixels[2] == 255u && d2->pixels[3] == 51u);
         }
 
         const char* p3 = "P3\n2 1\n255\n12 34 56  78 90 250\n";
-        auto d3 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p3), std::strlen(p3)));
+        auto d3 = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p3), StringRef(p3).size()));
         TEST_CHECK(d3.is_ok() && d3->width == 2u && d3->height == 1u && d3->channels == 3u);
         if (d3) {
             TEST_CHECK(d3->pixels[0] == 12u && d3->pixels[2] == 56u && d3->pixels[3] == 78u && d3->pixels[5] == 250u);
@@ -841,7 +840,7 @@ Array<u8> build_test_gif(u16 w, u16 h, bool interlaced, ArrayRef<u8> stream_indi
     gif.push_back(2u); // minCodeSize = 2
     Array<u8> lzw_bytes;
     u32 bit_buf = 0;
-    int bit_cnt = 0;
+    i32 bit_cnt = 0;
     auto put3 = [&](u32 code) {
         bit_buf |= (code & 7u) << bit_cnt;
         bit_cnt += 3;
@@ -927,9 +926,8 @@ void test_gif() {
 // ============================================================================
 
 Array<u8> load_fixture(const char* name) {
-    char path[1024];
-    std::snprintf(path, sizeof(path), "%s/%s", KEEL_IMAGEFILE_FIXTURES_DIR, name);
-    auto r = fs_read_file(StringRef(path, std::strlen(path)));
+    String path = keel::format("{}/{}", KEEL_IMAGEFILE_FIXTURES_DIR, name);
+    auto r = fs_read_file(path);
     TEST_CHECK(r.is_ok());
     return r.is_ok() ? keel::move(*r) : Array<u8>{};
 }
@@ -1008,8 +1006,8 @@ void test_tiff_fixtures() {
     if (g16) {
         TEST_CHECK(g16->width == 4u && g16->height == 4u && g16->channels == 1u && g16->sample_type == SampleType::U16);
         u16 p00 = 0, p33 = 0;
-        std::memcpy(&p00, g16->pixels.data() + 0, 2);
-        std::memcpy(&p33, g16->pixels.data() + 15 * 2, 2);
+        keel::mem_copy(&p00, g16->pixels.data() + 0, 2);
+        keel::mem_copy(&p33, g16->pixels.data() + 15 * 2, 2);
         TEST_CHECK(p00 == 1000u && p33 == 1015u);
     }
 
@@ -1164,8 +1162,8 @@ void test_tiff_roundtrips() {
         TEST_CHECK(dec.is_ok() && dec->sample_type == SampleType::U16);
         if (dec) {
             u16 v0 = 0, v1 = 0;
-            std::memcpy(&v0, dec->pixels.data() + 0, 2);
-            std::memcpy(&v1, dec->pixels.data() + 2, 2);
+            keel::mem_copy(&v0, dec->pixels.data() + 0, 2);
+            keel::mem_copy(&v1, dec->pixels.data() + 2, 2);
             TEST_CHECK(v0 == 65535u && v1 == 10u);
         }
     }
@@ -1214,7 +1212,7 @@ void test_tiff_roundtrips() {
         for (u32 i = 0; i < 6u; ++i) push32(4u);
 
         const u32 ifd_off = keel::as<u32>(tiled.size());
-        std::memcpy(tiled.data() + 4, &ifd_off, 4);
+        keel::mem_copy(tiled.data() + 4, &ifd_off, 4);
 
         auto add_entry = [&](u16 tag, u16 type, u32 cnt, u32 val) {
             push16(tag);
@@ -1261,10 +1259,14 @@ void test_file_io_and_robustness() {
         ImageFormat::Pnm, ImageFormat::Tiff, ImageFormat::Jpeg,
     };
 
+    auto tmp_dir_res = fs_temp_dir();
+    TEST_CHECK(tmp_dir_res.is_ok());
+    const StringRef tmp_dir = tmp_dir_res.is_ok() ? StringRef(*tmp_dir_res) : StringRef(".");
+
     for (usize i = 0; i < 6; ++i) {
-        char tmp_path[256];
-        std::snprintf(tmp_path, sizeof(tmp_path), "/tmp/keel_img_fmt_test_%zu.%s", i, exts[i]);
-        StringRef sp(tmp_path, std::strlen(tmp_path));
+        String fname = keel::format("keel_img_fmt_test_{}.{}", i, exts[i]);
+        String tmp_path = path_join(tmp_dir, fname);
+        StringRef sp = tmp_path;
 
         auto wr = write_image(sp, rgb);
         TEST_CHECK(wr.is_ok());
@@ -1371,9 +1373,9 @@ int main() {
     test_file_io_and_robustness();
 
     if (g_tests_failed != 0) {
-        std::fprintf(stderr, "%d test check(s) FAILED (%d passed)\n", g_tests_failed, g_tests_passed);
+        keel::eprintln("{} test check(s) FAILED ({} passed)", g_tests_failed, g_tests_passed);
         return 1;
     }
-    std::printf("All %d keel::imagefile test checks passed.\n", g_tests_passed);
+    keel::println("All {} keel::imagefile test checks passed.", g_tests_passed);
     return 0;
 }
