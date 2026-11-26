@@ -1334,7 +1334,7 @@ void test_file_io_and_robustness() {
     TEST_CHECK(encode_bmp(rgba16).error().code == ErrorCode::NotSupported);
     TEST_CHECK(encode_tga(rgba16).error().code == ErrorCode::NotSupported);
 
-    // Custom Arena allocator routing (also verifies conflict-free get_scratch when caller passes Arena::allocator()!)
+        // Custom Arena allocator routing (also verifies conflict-free get_scratch when caller passes Arena::allocator()!)
     {
         Arena arena(4 * 1024 * 1024);
         Allocator* a = arena.allocator();
@@ -1359,9 +1359,344 @@ void test_file_io_and_robustness() {
     }
 }
 
+void test_hardening_regressions() {
+    // 1. Packed P1 ASCII PBM without spaces between '0'/'1' bits.
+    {
+        const char* p1 = "P1\n# packed bits\n4 2\n1010\n0101\n";
+        auto d = decode_pnm(ArrayRef<u8>(reinterpret_cast<const u8*>(p1), StringRef(p1).size()));
+        TEST_CHECK(d.is_ok() && d->width == 4u && d->height == 2u && d->channels == 1u);
+        if (d) {
+            const u8 exp[8] = {0, 255, 0, 255, 255, 0, 255, 0};
+            TEST_CHECK(d->pixels == ArrayRef<u8>(exp, 8));
+        }
+    }
+
+    // 2. BI_BITFIELDS 16-bit RGB565 BMP (R=0xF800, G=0x07E0, B=0x001F).
+    {
+        Array<u8> bmp(70, u8{0}); // 14 + 40 + 12 (masks) + 4 (1 padded row of 2px = 4B)
+        bmp[0] = 'B';
+        bmp[1] = 'M';
+        const u32 fsz = 70u;
+        const u32 off = 66u;
+        keel::mem_copy(bmp.data() + 2, &fsz, 4);
+        keel::mem_copy(bmp.data() + 10, &off, 4);
+        bmp[14] = 40u;
+        bmp[18] = 2u;  // width = 2
+        bmp[22] = 1u;  // height = 1
+        bmp[26] = 1u;  // planes = 1
+        bmp[28] = 16u; // 16 bpp
+        bmp[30] = 3u;  // BI_BITFIELDS
+        const u32 mr = 0x0000F800u;
+        const u32 mg = 0x000007E0u;
+        const u32 mb = 0x0000001Fu;
+        keel::mem_copy(bmp.data() + 54, &mr, 4);
+        keel::mem_copy(bmp.data() + 58, &mg, 4);
+        keel::mem_copy(bmp.data() + 62, &mb, 4);
+        // Pixel 0: pure green (0x07E0) -> RGB(0, 255, 0); Pixel 1: pure red (0xF800) -> RGB(255, 0, 0)
+        const u16 px0 = 0x07E0u;
+        const u16 px1 = 0xF800u;
+        keel::mem_copy(bmp.data() + 66, &px0, 2);
+        keel::mem_copy(bmp.data() + 68, &px1, 2);
+
+        auto d = decode_bmp(bmp);
+        TEST_CHECK(d.is_ok() && d->width == 2u && d->height == 1u && d->channels == 3u);
+        if (d) {
+            TEST_CHECK(d->pixels[0] == 0u && d->pixels[1] == 255u && d->pixels[2] == 0u);
+            TEST_CHECK(d->pixels[3] == 255u && d->pixels[4] == 0u && d->pixels[5] == 0u);
+        }
+    }
+
+    // 3. Tiled TIFF with Horizontal Predictor (Predictor = 2) resets at every tile boundary!
+    {
+        Array<u8> tiled;
+        auto push16 = [&](u16 v) {
+            tiled.push_back(keel::as<u8>(v & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 8) & 0xFFu));
+        };
+        auto push32 = [&](u32 v) {
+            tiled.push_back(keel::as<u8>(v & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 8) & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 16) & 0xFFu));
+            tiled.push_back(keel::as<u8>((v >> 24) & 0xFFu));
+        };
+        tiled.push_back('I');
+        tiled.push_back('I');
+        push16(42u);
+        push32(0u);
+
+        // 4x2 Gray8 image split into two 2x2 tiles with horizontal differencing:
+        // Desired row 0: [10, 15 | 20, 25] -> tile0 diffs: [10, 5], tile1 diffs: [20, 5]
+        // Desired row 1: [30, 40 | 50, 65] -> tile0 diffs: [30, 10], tile1 diffs: [50, 15]
+        const u8 tile_data[8] = {10, 5, 30, 10, 20, 5, 50, 15};
+        const u32 base = keel::as<u32>(tiled.size());
+        tiled.append(ArrayRef<u8>(tile_data, 8));
+        const u32 toff = keel::as<u32>(tiled.size());
+        push32(base);
+        push32(base + 4u);
+        const u32 tcnt = keel::as<u32>(tiled.size());
+        push32(4u);
+        push32(4u);
+        const u32 ifd = keel::as<u32>(tiled.size());
+        keel::mem_copy(tiled.data() + 4, &ifd, 4);
+
+        auto add_entry = [&](u16 tag, u16 type, u32 cnt, u32 val) {
+            push16(tag);
+            push16(type);
+            push32(cnt);
+            push32(val);
+        };
+        push16(11u);
+        add_entry(256, 4, 1, 4);
+        add_entry(257, 4, 1, 2);
+        add_entry(258, 3, 1, 8);
+        add_entry(259, 3, 1, 1);
+        add_entry(262, 3, 1, 1);
+        add_entry(277, 3, 1, 1);
+        add_entry(317, 3, 1, 2); // Horizontal Predictor
+        add_entry(322, 4, 1, 2);
+        add_entry(323, 4, 1, 2);
+        add_entry(324, 4, 2, toff);
+        add_entry(325, 4, 2, tcnt);
+        push32(0u);
+
+        auto d = decode_tiff(tiled);
+        TEST_CHECK(d.is_ok() && d->width == 4u && d->height == 2u);
+        if (d) {
+            const u8 exp[8] = {10, 15, 20, 25, 30, 40, 50, 65};
+            TEST_CHECK(d->pixels == ArrayRef<u8>(exp, 8));
+        }
+    }
+
+    // 4. Malformed grayscale TGA with pixel_depth=24 must be rejected (no heap buffer overflow!).
+    {
+        Array<u8> bad_tga(18 + 12, u8{0});
+        bad_tga[2] = 3u;   // Grayscale
+        bad_tga[12] = 2u;  // width = 2
+        bad_tga[14] = 2u;  // height = 2
+        bad_tga[16] = 24u; // Invalid for grayscale
+        auto d = decode_tga(bad_tga);
+        TEST_CHECK(d.is_err() && d.error().code == ErrorCode::InvalidData);
+    }
+}
+
+// ============================================================================
+// CLI Mode Helpers for Reference & Adversarial Differential Testing
+// ============================================================================
+
+const char* format_name(ImageFormat f) noexcept {
+    switch (f) {
+        case ImageFormat::Png: return "png";
+        case ImageFormat::Jpeg: return "jpeg";
+        case ImageFormat::Tiff: return "tiff";
+        case ImageFormat::Bmp: return "bmp";
+        case ImageFormat::Tga: return "tga";
+        case ImageFormat::Pnm: return "pnm";
+        case ImageFormat::Gif: return "gif";
+        case ImageFormat::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+const char* sample_type_name(SampleType st) noexcept {
+    switch (st) {
+        case SampleType::U8: return "u8";
+        case SampleType::U16: return "u16";
+        case SampleType::U32: return "u32";
+        case SampleType::I8: return "i8";
+        case SampleType::I16: return "i16";
+        case SampleType::I32: return "i32";
+        case SampleType::F32: return "f32";
+        case SampleType::F64: return "f64";
+    }
+    return "unknown";
+}
+
+bool parse_u32_arg(StringRef s, u32& out) noexcept {
+    if (s.empty()) return false;
+    u64 v = 0;
+    for (usize i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c < '0' || c > '9') return false;
+        v = v * 10u + keel::as<u64>(c - '0');
+        if (v > 0xFFFFFFFFULL) return false;
+    }
+    out = keel::as<u32>(v);
+    return true;
+}
+
+bool parse_sample_type_arg(StringRef s, SampleType& out) noexcept {
+    if (s == "u8") { out = SampleType::U8; return true; }
+    if (s == "u16") { out = SampleType::U16; return true; }
+    if (s == "u32") { out = SampleType::U32; return true; }
+    if (s == "i8") { out = SampleType::I8; return true; }
+    if (s == "i16") { out = SampleType::I16; return true; }
+    if (s == "i32") { out = SampleType::I32; return true; }
+    if (s == "f32") { out = SampleType::F32; return true; }
+    if (s == "f64") { out = SampleType::F64; return true; }
+    return false;
+}
+
+i32 cli_decode(StringRef in_path, StringRef out_raw_path, u32 page, bool expand_indexed) {
+    auto bytes_res = fs_read_file(in_path);
+    if (!bytes_res) {
+        keel::eprintln("read error");
+        return 2;
+    }
+    const ImageFormat fmt = sniff_image_format(*bytes_res);
+    auto info_res = peek_image(*bytes_res);
+    const u32 pages = info_res ? info_res->page_count : 1u;
+
+    ImageDecodeOptions opts;
+    opts.page = page;
+    opts.expand_indexed = expand_indexed;
+    opts.max_bytes = 64ULL * 1024 * 1024;
+
+    auto dec = decode_image(*bytes_res, opts);
+    if (!dec) {
+        keel::eprintln("decode error: {}", keel::as<i32>(dec.error().code));
+        return 3;
+    }
+
+    auto wr = fs_write_file(out_raw_path, dec->pixels);
+    if (!wr) {
+        keel::eprintln("write error");
+        return 4;
+    }
+    if (dec->has_palette()) {
+        String pal_path = keel::format("{}.pal", out_raw_path);
+        const u8* pbytes = reinterpret_cast<const u8*>(dec->palette.data());
+        (void)fs_write_file(pal_path, ArrayRef<u8>(pbytes, dec->palette.size() * sizeof(u16)));
+    }
+
+    keel::println(
+        "{{\"format\":\"{}\",\"width\":{},\"height\":{},\"channels\":{},\"sample_type\":\"{}\",\"has_palette\":{},\"palette_bits\":{},\"palette_entries\":{},\"page_count\":{}}}",
+        format_name(fmt), dec->width, dec->height, dec->channels, sample_type_name(dec->sample_type),
+        dec->has_palette() ? "true" : "false", dec->palette_bits, dec->palette_entry_count(), pages);
+    return 0;
+}
+
+i32 cli_encode(StringRef fmt, u32 w, u32 h, u16 ch, SampleType st, StringRef in_raw_path, StringRef out_img_path,
+               StringRef extra) {
+    auto raw_res = fs_read_file(in_raw_path);
+    if (!raw_res) {
+        keel::eprintln("read raw error");
+        return 2;
+    }
+    ImageView view{
+        .width = w,
+        .height = h,
+        .channels = ch,
+        .sample_type = st,
+        .row_stride_bytes = 0,
+        .pixels = *raw_res,
+    };
+
+    Result<Array<u8>> enc = ErrorCode::InvalidArgument;
+    if (fmt == "png") {
+        enc = encode_png(view, PngEncodeOptions{.compression_level = 6});
+    } else if (fmt == "jpeg") {
+        u32 q = 92;
+        if (!extra.empty()) (void)parse_u32_arg(extra, q);
+        enc = encode_jpeg(view, JpegEncodeOptions{.quality = keel::as<i32>(q)});
+    } else if (fmt == "bmp") {
+        enc = encode_bmp(view);
+    } else if (fmt == "tga") {
+        enc = encode_tga(view);
+    } else if (fmt == "pnm" || fmt == "pgm" || fmt == "ppm" || fmt == "pbm") {
+        PnmSubformat sf = PnmSubformat::Auto;
+        if (fmt == "pbm") sf = PnmSubformat::Pbm;
+        else if (fmt == "pgm") sf = PnmSubformat::Pgm;
+        else if (fmt == "ppm") sf = PnmSubformat::Ppm;
+        enc = encode_pnm(view, PnmEncodeOptions{.subformat = sf});
+    } else if (fmt.starts_with("tiff")) {
+        TiffEncodeOptions topts;
+        if (fmt == "tiff_packbits") topts.compression = TiffCompression::PackBits;
+        else if (fmt == "tiff_lzw") topts.compression = TiffCompression::Lzw;
+        else if (fmt == "tiff_deflate") topts.compression = TiffCompression::Deflate;
+        else if (fmt == "tiff_big") topts.bigtiff = true;
+        else if (fmt == "tiff_big_lzw") {
+            topts.compression = TiffCompression::Lzw;
+            topts.bigtiff = true;
+        }
+        Array<u8> existing;
+        if (extra == "append") {
+            auto ex = fs_read_file(out_img_path);
+            if (ex) existing = keel::move(*ex);
+        }
+        enc = encode_tiff(view, topts, existing);
+    }
+
+    if (!enc) {
+        keel::eprintln("encode error: {}", keel::as<i32>(enc.error().code));
+        return 3;
+    }
+    auto wr = fs_write_file(out_img_path, *enc);
+    if (!wr) {
+        keel::eprintln("write error");
+        return 4;
+    }
+    return 0;
+}
+
+i32 cli_fuzz_dir(StringRef dir_path) {
+    usize total = 0;
+    usize ok_count = 0;
+    usize err_count = 0;
+    ImageDecodeOptions opts;
+    opts.max_width = 4096;
+    opts.max_height = 4096;
+    opts.max_pixels = 4ULL * 1024 * 1024;
+    opts.max_bytes = 16ULL * 1024 * 1024;
+
+    Error err = fs_read_dir(dir_path, [&](const DirEntry& ent) -> bool {
+        if (!ent.is_file) return true;
+        auto bytes_res = fs_read_file(ent.full_path);
+        if (!bytes_res) return true;
+        ++total;
+        (void)sniff_image_format(*bytes_res);
+        (void)peek_image(*bytes_res);
+        auto dec = decode_image(*bytes_res, opts);
+        if (dec.is_ok()) {
+            ++ok_count;
+        } else {
+            ++err_count;
+        }
+        return true;
+    });
+    if (err.is_err()) {
+        keel::eprintln("read_dir error");
+        return 2;
+    }
+    keel::println("Fuzzed {} image files (ok={}, rejected={}, crashes=0)", total, ok_count, err_count);
+    return 0;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc >= 4 && StringRef(argv[1]) == "--decode") {
+        u32 page = 0;
+        bool expand = false;
+        if (argc >= 5) (void)parse_u32_arg(StringRef(argv[4]), page);
+        if (argc >= 6 && StringRef(argv[5]) == "1") expand = true;
+        return cli_decode(StringRef(argv[2]), StringRef(argv[3]), page, expand);
+    }
+    if (argc >= 9 && StringRef(argv[1]) == "--encode") {
+        u32 w = 0, h = 0, ch = 0;
+        SampleType st = SampleType::U8;
+        if (!parse_u32_arg(StringRef(argv[3]), w) || !parse_u32_arg(StringRef(argv[4]), h) ||
+            !parse_u32_arg(StringRef(argv[5]), ch) || !parse_sample_type_arg(StringRef(argv[6]), st)) {
+            keel::eprintln("bad encode args");
+            return 2;
+        }
+        StringRef extra = (argc >= 10) ? StringRef(argv[9]) : StringRef{};
+        return cli_encode(StringRef(argv[2]), w, h, keel::as<u16>(ch), st, StringRef(argv[7]), StringRef(argv[8]),
+                          extra);
+    }
+    if (argc == 3 && StringRef(argv[1]) == "--fuzz") {
+        return cli_fuzz_dir(StringRef(argv[2]));
+    }
+
     test_png();
     test_jpeg();
     test_bmp();
@@ -1371,6 +1706,7 @@ int main() {
     test_tiff_fixtures();
     test_tiff_roundtrips();
     test_file_io_and_robustness();
+    test_hardening_regressions();
 
     if (g_tests_failed != 0) {
         keel::eprintln("{} test check(s) FAILED ({} passed)", g_tests_failed, g_tests_passed);

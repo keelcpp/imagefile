@@ -214,18 +214,31 @@ Result<Image> decode_pnm(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     // ASCII formats: P1, P2, P3
     usize p = hdr.data_offset;
     const usize total_samples = w * h * as<usize>(channels);
+    if (hdr.magic == 1) {
+        // Per Netpbm P1 spec, bits '0'/'1' need not be separated by whitespace.
+        for (usize i = 0; i < total_samples; ++i) {
+            p = pnm_impl::skip_ws_and_comments(data, len, p);
+            if (p >= len) [[unlikely]] {
+                return ErrorCode::EndOfFile;
+            }
+            const u8 ch = data[p++];
+            if (ch == '0') {
+                dst[i] = 255u;
+            } else if (ch == '1') {
+                dst[i] = 0u;
+            } else {
+                return ErrorCode::InvalidData;
+            }
+        }
+        return img;
+    }
     for (usize i = 0; i < total_samples; ++i) {
         u32 val = 0;
         const ErrorCode ec = pnm_impl::read_next_u32(data, len, p, val);
         if (ec != ErrorCode::Ok) [[unlikely]] {
             return ec;
         }
-        if (hdr.magic == 1) {
-            if (val > 1u) [[unlikely]] {
-                return ErrorCode::InvalidData;
-            }
-            dst[i] = (val != 0u) ? 0u : 255u;
-        } else if (!is_16bit) {
+        if (!is_16bit) {
             if (val > hdr.maxval) val = hdr.maxval;
             dst[i] = (hdr.maxval == 255u) ? as<u8>(val)
                                           : as<u8>((val * 255u + (hdr.maxval >> 1)) / hdr.maxval);

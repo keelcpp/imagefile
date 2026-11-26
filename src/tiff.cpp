@@ -729,7 +729,8 @@ void write_u64_le_at(Array<u8>& buf, usize off, u64 v) noexcept {
 [[nodiscard]] Array<u8> encode_lzw(const u8* src, usize n, Arena& arena, Allocator* alloc) {
     constexpr u32 kClearCode = 256u;
     constexpr u32 kEoiCode = 257u;
-    constexpr u32 kMaxEntries = 4096u;
+    // Per TIFF 6.0 Section 13, emit ClearCode before code 4094 for maximum decoder compatibility.
+    constexpr u32 kMaxEntries = 4094u;
     constexpr u32 kHashSize = 8192u;
     constexpr u32 kHashMask = kHashSize - 1u;
     constexpr u32 kEmptyKey = 0xFFFFFFFFu;
@@ -1243,13 +1244,16 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             return ErrorCode::InvalidData;
         }
 
+        if (!subbyte && tw > Limits<usize>::kMax / (spp_block * bps)) [[unlikely]] {
+            return ErrorCode::OutOfRange;
+        }
         const usize src_stride =
             subbyte ? ((tw * timg.bits_per_sample + 7u) / 8u) : (tw * spp_block * bps);
         if (src_stride > 0 && tl > Limits<usize>::kMax / src_stride) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
         const usize tile_bytes = src_stride * tl;
-        if (opts.max_bytes > 0 && tile_bytes > block_max_out) [[unlikely]] {
+        if (tile_bytes > block_max_out) [[unlikely]] {
             return ErrorCode::OutOfRange;
         }
 
@@ -1265,6 +1269,9 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                                                                 scratch.arena(), blk_alloc));
                     if (tile.size() < tile_bytes) {
                         tile.resize(tile_bytes, u8{0});
+                    }
+                    if (timg.predictor == 2u) {
+                        tiff_impl::apply_horizontal_undiff(tile.data(), tl, tw, spp_block, bps, br.big_endian);
                     }
                     const usize r0 = ty * tl;
                     const usize c0 = tx * tw;
@@ -1292,8 +1299,8 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
         for (usize p = 0; p < num_planes; ++p) {
             for (usize si = 0; si < strips_per_plane; ++si) {
+                if (si > (H - 1u) / rps_eff) break;
                 const usize r0 = si * rps_eff;
-                if (r0 >= H) break;
                 const usize rh = (rps_eff < H - r0) ? rps_eff : (H - r0);
                 const usize hint = src_stride * rh;
                 const usize global_idx = p * strips_per_plane + si;
@@ -1307,6 +1314,9 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 if (strip.size() < hint) {
                     strip.resize(hint, u8{0});
                 }
+                if (timg.predictor == 2u) {
+                    tiff_impl::apply_horizontal_undiff(strip.data(), rh, W, spp_block, bps, br.big_endian);
+                }
                 if (planar) {
                     put_planar(strip.data(), r0, 0u, rh, W, p, src_stride);
                 } else {
@@ -1314,10 +1324,6 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 }
             }
         }
-    }
-
-    if (timg.predictor == 2u) {
-        tiff_impl::apply_horizontal_undiff(dst, H, W, S, bps, br.big_endian);
     }
 
     // Convert multi-byte samples from TIFF endianness to native host endianness if needed.

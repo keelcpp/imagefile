@@ -64,7 +64,6 @@ struct DctBasis {
 };
 
 consteval f64 cos_pi_over_16(i32 k_raw) {
-    constexpr f64 kPi = 3.14159265358979323846264338327950288;
     i32 k = k_raw % 32;
     if (k < 0) k += 32;
     if (k > 16) k = 32 - k;
@@ -76,7 +75,7 @@ consteval f64 cos_pi_over_16(i32 k_raw) {
         k = 16 - k;
         sign = -1.0;
     }
-    const f64 theta = as<f64>(k) * (kPi / 16.0);
+    const f64 theta = as<f64>(k) * (keel::kPi / 16.0);
     const f64 t2 = theta * theta;
     f64 term = 1.0;
     f64 sum = 1.0;
@@ -89,9 +88,8 @@ consteval f64 cos_pi_over_16(i32 k_raw) {
 
 consteval DctBasis build_dct_basis() {
     DctBasis b{};
-    constexpr f64 kInvSqrt2 = 0.707106781186547524400844362104849039;
     for (i32 u = 0; u < 8; ++u) {
-        const f64 cu = (u == 0) ? kInvSqrt2 : 1.0;
+        const f64 cu = (u == 0) ? keel::kInvSqrt2 : 1.0;
         for (i32 x = 0; x < 8; ++x) {
             b.m[u][x] = as<f32>(0.5 * cu * cos_pi_over_16((2 * x + 1) * u));
         }
@@ -147,10 +145,10 @@ void fdct8x8(const f32 in[64], f32 out[64]) noexcept {
     }
 }
 
-[[nodiscard]] constexpr u8 clamp_u8(i32 v) noexcept {
-    if (v < 0) return 0;
-    if (v > 255) return 255;
-    return as<u8>(v);
+[[nodiscard]] constexpr u8 clamp_f32_to_u8(f32 v) noexcept {
+    if (!(v > 0.0f)) return 0u;
+    if (v >= 255.0f) return 255u;
+    return as<u8>(v + 0.5f);
 }
 
 [[nodiscard]] constexpr i16 round_to_i16(f32 x) noexcept {
@@ -322,12 +320,12 @@ void decode_prog_dc_first(JpegBitReader& reader, const DecHuffTable& dc_ht, i32&
     const i32 cat = reader.decode_symbol(dc_ht);
     const i32 diff = reader.decode_value(cat);
     last_dc += diff;
-    blk[0] = as<i16>(last_dc << al);
+    blk[0] = as<i16>(as<u32>(last_dc) << al);
 }
 
 void decode_prog_dc_refine(JpegBitReader& reader, i16 blk[64], i32 al) noexcept {
     if (reader.get_bits(1) != 0u) {
-        blk[0] = as<i16>(blk[0] + (1 << al));
+        blk[0] = as<i16>(as<i32>(blk[0]) + (1 << al));
     }
 }
 
@@ -353,7 +351,7 @@ void decode_prog_ac_first(JpegBitReader& reader, const DecHuffTable& ac_ht, i16 
             k += r;
             if (k > se) break;
             const i32 val = reader.decode_value(s);
-            blk[k] = as<i16>(val << al);
+            blk[k] = as<i16>(as<u32>(val) << al);
             ++k;
         }
     }
@@ -682,6 +680,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     usize p = 2;
     usize sos_offset = 0;
     u16 restart_interval = 0;
+    u16 baseline_scan_order[3] = {0, 1, 2};
 
     while (p < len) {
         if (data[p] != 0xFFu) {
@@ -796,6 +795,12 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 }
             }
             if (!is_progressive) {
+                if (num_scan_comps != channels) [[unlikely]] {
+                    return ErrorCode::NotSupported;
+                }
+                for (u8 j = 0; j < num_scan_comps; ++j) {
+                    baseline_scan_order[j] = scan_comp_idx[j];
+                }
                 sos_offset = p + seg_len;
                 break;
             }
@@ -805,7 +810,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             const u8 ah_al = seg[3u + as<usize>(num_scan_comps) * 2u];
             const i32 ah = (ah_al >> 4) & 0x0F;
             const i32 al = ah_al & 0x0F;
-            if (ss > se || se >= 64) [[unlikely]] {
+            if (ss > se || se >= 64 || al > 13 || ah > 14 || (num_scan_comps > 1 && ss > 0)) [[unlikely]] {
                 return ErrorCode::InvalidData;
             }
 
@@ -837,6 +842,15 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     return ErrorCode::InvalidData;
                 }
                 if (ac_huff[ti].populated && !ac_huff[ti].build()) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+            }
+            for (u8 j = 0; j < num_scan_comps; ++j) {
+                const ComponentInfo& c = comps[scan_comp_idx[j]];
+                if (ss == 0 && ah == 0 && !dc_huff[c.dc_table_id].populated) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+                if (ss > 0 && !ac_huff[c.ac_table_id].populated) [[unlikely]] {
                     return ErrorCode::InvalidData;
                 }
             }
@@ -1076,7 +1090,8 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 last_dc[2] = 0;
             }
 
-            for (u16 ci = 0; ci < channels; ++ci) {
+            for (u16 si = 0; si < channels; ++si) {
+                const u16 ci = is_progressive ? si : baseline_scan_order[si];
                 const ComponentInfo& c = comps[ci];
                 const u32 cw = as<u32>(c.h_samp) * 8u;
                 f32* plane = mcu_planes[ci];
@@ -1120,8 +1135,8 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0);
                     for (u32 lx = 0; lx < lx_end; ++lx) {
                         const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
-                        const f32 y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.5f;
-                        out_row[lx] = jpeg_impl::clamp_u8(as<i32>(y_val));
+                        const f32 y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.0f;
+                        out_row[lx] = jpeg_impl::clamp_f32_to_u8(y_val);
                     }
                 }
             } else {
@@ -1142,13 +1157,13 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                         const f32 cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
                         const f32 cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
 
-                        const i32 r = as<i32>(y_val + 1.402f * cr_val + 128.5f);
-                        const i32 g = as<i32>(y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.5f);
-                        const i32 b = as<i32>(y_val + 1.772f * cb_val + 128.5f);
+                        const f32 r = y_val + 1.402f * cr_val + 128.0f;
+                        const f32 g = y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.0f;
+                        const f32 b = y_val + 1.772f * cb_val + 128.0f;
 
-                        out_row[lx * 3u + 0] = jpeg_impl::clamp_u8(r);
-                        out_row[lx * 3u + 1] = jpeg_impl::clamp_u8(g);
-                        out_row[lx * 3u + 2] = jpeg_impl::clamp_u8(b);
+                        out_row[lx * 3u + 0] = jpeg_impl::clamp_f32_to_u8(r);
+                        out_row[lx * 3u + 1] = jpeg_impl::clamp_f32_to_u8(g);
+                        out_row[lx * 3u + 2] = jpeg_impl::clamp_f32_to_u8(b);
                     }
                 }
             }

@@ -5,6 +5,32 @@ namespace keel::imagefile {
 namespace {
 namespace bmp_impl {
 
+struct BitfieldChannel {
+    u32 mask = 0;
+    u32 shift = 0;
+    u32 max_val = 0;
+
+    void init(u32 m) noexcept {
+        mask = m;
+        shift = 0;
+        max_val = 0;
+        if (m == 0) return;
+        u32 tmp = m;
+        while ((tmp & 1u) == 0u) {
+            tmp >>= 1;
+            ++shift;
+        }
+        max_val = tmp;
+    }
+
+    [[nodiscard]] u8 extract(u32 v) const noexcept {
+        if (max_val == 0) return 0u;
+        const u32 raw = (v & mask) >> shift;
+        if (max_val == 255u) return as<u8>(raw);
+        return as<u8>((as<u64>(raw) * 255ULL + (as<u64>(max_val) >> 1)) / as<u64>(max_val));
+    }
+};
+
 struct BmpHeader {
     u32 file_size = 0;
     u32 off_bits = 0;
@@ -15,6 +41,11 @@ struct BmpHeader {
     u32 compression = 0;
     u32 num_colors = 0;
     bool top_down = false;
+    u32 mask_r = 0;
+    u32 mask_g = 0;
+    u32 mask_b = 0;
+    u32 mask_a = 0;
+    bool has_bitfields = false;
 };
 
 [[nodiscard]] Result<BmpHeader> parse_bmp_header(ArrayRef<u8> bytes) noexcept {
@@ -81,6 +112,23 @@ struct BmpHeader {
     }
     if (hdr.compression != 0 && hdr.compression != 1 && hdr.compression != 2 && hdr.compression != 3) [[unlikely]] {
         return ErrorCode::NotSupported;
+    }
+    if (hdr.compression == 3u) {
+        if (hdr.bit_count != 16u && hdr.bit_count != 32u) [[unlikely]] {
+            return ErrorCode::InvalidData;
+        }
+        // In BITMAPINFOHEADER (40B), the 3 DWORD masks follow immediately at file offset 54;
+        // in BITMAPV2/V3/V4/V5 headers (>= 52B), they sit inside the header at the same offset 54.
+        if (len < 66u) [[unlikely]] {
+            return ErrorCode::EndOfFile;
+        }
+        hdr.mask_r = detail::read_u32_le(data + 54);
+        hdr.mask_g = detail::read_u32_le(data + 58);
+        hdr.mask_b = detail::read_u32_le(data + 62);
+        if (hdr.header_size >= 56u && len >= 70u) {
+            hdr.mask_a = detail::read_u32_le(data + 66);
+        }
+        hdr.has_bitfields = true;
     }
 
     return hdr;
@@ -261,6 +309,17 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::EndOfFile;
     }
 
+    bmp_impl::BitfieldChannel bf_r{};
+    bmp_impl::BitfieldChannel bf_g{};
+    bmp_impl::BitfieldChannel bf_b{};
+    bmp_impl::BitfieldChannel bf_a{};
+    if (hdr.has_bitfields) {
+        bf_r.init(hdr.mask_r);
+        bf_g.init(hdr.mask_g);
+        bf_b.init(hdr.mask_b);
+        bf_a.init(hdr.mask_a);
+    }
+
     for (usize r = 0; r < h; ++r) {
         const usize src_y = hdr.top_down ? r : (h - 1u - r);
         const u8* srow = pixel_data + src_y * row_stride;
@@ -293,18 +352,37 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 drow[c * 3u + 2u] = srow[c * 3u + 0u];
             }
         } else if (hdr.bit_count == 32u) {
-            for (usize c = 0; c < w; ++c) {
-                drow[c * 4u + 0u] = srow[c * 4u + 2u];
-                drow[c * 4u + 1u] = srow[c * 4u + 1u];
-                drow[c * 4u + 2u] = srow[c * 4u + 0u];
-                drow[c * 4u + 3u] = srow[c * 4u + 3u];
+            if (hdr.has_bitfields) {
+                for (usize c = 0; c < w; ++c) {
+                    const u32 v = detail::read_u32_le(srow + c * 4u);
+                    drow[c * 4u + 0u] = bf_r.extract(v);
+                    drow[c * 4u + 1u] = bf_g.extract(v);
+                    drow[c * 4u + 2u] = bf_b.extract(v);
+                    drow[c * 4u + 3u] = (bf_a.max_val > 0) ? bf_a.extract(v) : u8{255};
+                }
+            } else {
+                for (usize c = 0; c < w; ++c) {
+                    drow[c * 4u + 0u] = srow[c * 4u + 2u];
+                    drow[c * 4u + 1u] = srow[c * 4u + 1u];
+                    drow[c * 4u + 2u] = srow[c * 4u + 0u];
+                    drow[c * 4u + 3u] = srow[c * 4u + 3u];
+                }
             }
         } else if (hdr.bit_count == 16u) {
-            for (usize c = 0; c < w; ++c) {
-                const u16 v = detail::read_u16_le(srow + c * 2u);
-                drow[c * 3u + 0u] = as<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
-                drow[c * 3u + 1u] = as<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
-                drow[c * 3u + 2u] = as<u8>(((v & 0x1Fu) * 255u) / 31u);
+            if (hdr.has_bitfields) {
+                for (usize c = 0; c < w; ++c) {
+                    const u32 v = detail::read_u16_le(srow + c * 2u);
+                    drow[c * 3u + 0u] = bf_r.extract(v);
+                    drow[c * 3u + 1u] = bf_g.extract(v);
+                    drow[c * 3u + 2u] = bf_b.extract(v);
+                }
+            } else {
+                for (usize c = 0; c < w; ++c) {
+                    const u16 v = detail::read_u16_le(srow + c * 2u);
+                    drow[c * 3u + 0u] = as<u8>((((v >> 10) & 0x1Fu) * 255u) / 31u);
+                    drow[c * 3u + 1u] = as<u8>((((v >> 5) & 0x1Fu) * 255u) / 31u);
+                    drow[c * 3u + 2u] = as<u8>(((v & 0x1Fu) * 255u) / 31u);
+                }
             }
         }
     }
@@ -329,7 +407,10 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
     const u16 bit_count = (view.channels == 1) ? 8u : ((view.channels == 3) ? 24u : 32u);
     const usize row_stride = ((w * as<usize>(bit_count) + 31u) / 32u) * 4u;
     const usize pal_bytes = (view.channels == 1) ? 1024u : 0u;
-    const usize off_bits = 14u + 40u + pal_bytes;
+    // Use BITMAPV4HEADER (108 bytes) with BI_BITFIELDS for 32-bit RGBA so external readers
+    // preserve the alpha channel per the Windows DIB specification.
+    const u32 dib_header_size = (view.channels == 4) ? 108u : 40u;
+    const usize off_bits = 14u + as<usize>(dib_header_size) + pal_bytes;
 
     if (row_stride > 0 && h > (usize{0xFFFFFFFFu} - off_bits) / row_stride) [[unlikely]] {
         return ErrorCode::OutOfRange;
@@ -349,18 +430,30 @@ Result<Array<u8>> encode_bmp(const ImageView& view, Allocator* alloc) {
     detail::push_u16_le(out, 0u);
     detail::push_u32_le(out, as<u32>(off_bits));
 
-    // 2. BITMAPINFOHEADER (40 bytes)
-    detail::push_u32_le(out, 40u);
+    // 2. BITMAPINFOHEADER (40 bytes) or BITMAPV4HEADER (108 bytes for RGBA)
+    detail::push_u32_le(out, dib_header_size);
     detail::push_u32_le(out, view.width);
     detail::push_u32_le(out, view.height);
     detail::push_u16_le(out, 1u);
     detail::push_u16_le(out, bit_count);
-    detail::push_u32_le(out, 0u);
+    detail::push_u32_le(out, (view.channels == 4) ? 3u : 0u); // BI_BITFIELDS for RGBA, BI_RGB otherwise
     detail::push_u32_le(out, as<u32>(image_size));
     detail::push_u32_le(out, 2835u);
     detail::push_u32_le(out, 2835u);
     detail::push_u32_le(out, (view.channels == 1) ? 256u : 0u);
     detail::push_u32_le(out, 0u);
+
+    if (view.channels == 4) {
+        // Channel masks (BGRA in little-endian u32) + LCS_sRGB + zeroed endpoints/gamma (68 bytes).
+        detail::push_u32_le(out, 0x00FF0000u); // Red mask
+        detail::push_u32_le(out, 0x0000FF00u); // Green mask
+        detail::push_u32_le(out, 0x000000FFu); // Blue mask
+        detail::push_u32_le(out, 0xFF000000u); // Alpha mask
+        detail::push_u32_le(out, 0x73524742u); // 'sRGB' (LCS_sRGB)
+        for (i32 i = 0; i < 48; ++i) {
+            out.push_back(0u);
+        }
+    }
 
     // 3. Grayscale identity palette for 8-bit 1-channel BMP
     if (view.channels == 1) {

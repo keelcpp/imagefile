@@ -49,9 +49,15 @@ struct TgaHeader {
     if (hdr.pixel_depth != 8 && hdr.pixel_depth != 16 && hdr.pixel_depth != 24 && hdr.pixel_depth != 32) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
+    if ((hdr.image_type == 3 || hdr.image_type == 11) && hdr.pixel_depth != 8) [[unlikely]] {
+        return ErrorCode::InvalidData;
+    }
     if ((hdr.image_type == 1 || hdr.image_type == 9) &&
-        (hdr.color_map_type != 1 || hdr.cmap_length == 0 ||
+        (hdr.color_map_type != 1 || hdr.cmap_length == 0 || (hdr.pixel_depth != 8 && hdr.pixel_depth != 16) ||
          (hdr.cmap_depth != 15 && hdr.cmap_depth != 16 && hdr.cmap_depth != 24 && hdr.cmap_depth != 32))) [[unlikely]] {
+        return ErrorCode::InvalidData;
+    }
+    if ((hdr.image_type == 2 || hdr.image_type == 10) && hdr.pixel_depth == 8) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
 
