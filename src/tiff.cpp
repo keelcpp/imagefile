@@ -459,18 +459,20 @@ struct TiffIfdInfo {
     return out;
 }
 
-[[nodiscard]] Result<Array<u8>> decode_lzw(const u8* src, usize src_len, usize out_hint, usize max_out, Arena& arena,
+[[nodiscard]] Result<Array<u8>> decode_lzw(const u8* src, usize src_len, usize out_hint, usize max_out,
                                            Allocator* alloc) {
     constexpr u32 kClearCode = 256u;
     constexpr u32 kEoiCode = 257u;
     constexpr u32 kNoCode = 0xFFFFFFFFu;
     constexpr u32 kMaxCode = 4096u;
 
-    ArenaTemp tmp = arena.begin_temp();
-    u16* prefix = arena.alloc_array<u16>(kMaxCode);
-    u8* suffix = arena.alloc_array<u8>(kMaxCode);
-    u8* first_char = arena.alloc_array<u8>(kMaxCode);
-    u8* stack = arena.alloc_array<u8>(kMaxCode);
+    // Select a thread-local scratch arena guaranteed disjoint from `alloc` so rewinding `tmp`
+    // on return never invalidates `out` (even when `alloc` itself is a caller's ArenaTemp).
+    ArenaTemp tmp = get_scratch(alloc);
+    u16* prefix = tmp.arena().alloc_array<u16>(kMaxCode);
+    u8* suffix = tmp.arena().alloc_array<u8>(kMaxCode);
+    u8* first_char = tmp.arena().alloc_array<u8>(kMaxCode);
+    u8* stack = tmp.arena().alloc_array<u8>(kMaxCode);
 
     for (u32 c = 0; c < 256u; ++c) {
         prefix[c] = 0xFFFFu;
@@ -566,7 +568,7 @@ struct TiffIfdInfo {
 }
 
 [[nodiscard]] Result<Array<u8>> decompress_block(const ByteReader& br, u64 off64, u64 cnt64, u16 compression,
-                                                 usize hint_bytes, usize max_out, Arena& arena, Allocator* alloc) {
+                                                 usize hint_bytes, usize max_out, Allocator* alloc) {
     if (off64 > as<u64>(br.size) || cnt64 > as<u64>(br.size) - off64) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
@@ -586,7 +588,7 @@ struct TiffIfdInfo {
         case 32773u:
             return decode_packbits(src, cnt, hint_bytes, max_out, alloc);
         case 5u:
-            return decode_lzw(src, cnt, hint_bytes, max_out, arena, alloc);
+            return decode_lzw(src, cnt, hint_bytes, max_out, alloc);
         case 8u:
         case 32946u: {
             const keel::compress::InflateOptions inf_opts{
@@ -1298,7 +1300,7 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     KEEL_TRY_ASSIGN(Array<u8> tile,
                                     tiff_impl::decompress_block(br, timg.tile_offsets[idx], timg.tile_byte_counts[idx],
                                                                 timg.compression, tile_bytes, block_max_out,
-                                                                scratch.arena(), blk_alloc));
+                                                                blk_alloc));
                     if (tile.size() < tile_bytes) {
                         tile.resize(tile_bytes, u8{0});
                     }
@@ -1345,7 +1347,7 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 KEEL_TRY_ASSIGN(Array<u8> strip,
                                 tiff_impl::decompress_block(br, timg.strip_offsets[global_idx],
                                                             timg.strip_byte_counts[global_idx], timg.compression, hint,
-                                                            block_max_out, scratch.arena(), blk_alloc));
+                                                            block_max_out, blk_alloc));
                 if (strip.size() < hint) {
                     strip.resize(hint, u8{0});
                 }

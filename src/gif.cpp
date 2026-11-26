@@ -201,8 +201,7 @@ struct GifStream {
 }
 
 [[nodiscard]] Result<Array<u8>> decode_gif_frame_indices(
-    ArrayRef<u8> bytes, const GifFrameDesc& frame, const ImageDecodeOptions& opts, Allocator* dst_alloc,
-    Arena& scratch_arena) {
+    ArrayRef<u8> bytes, const GifFrameDesc& frame, const ImageDecodeOptions& opts, Allocator* dst_alloc) {
     KEEL_TRY_ASSIGN(const usize npix,
                     detail::validate_decode_allocation(frame.width, frame.height, 1, SampleType::U8, opts));
 
@@ -218,7 +217,9 @@ struct GifStream {
         return ErrorCode::InvalidData;
     }
 
-    ArenaTemp frame_tmp = scratch_arena.begin_temp();
+    // Use a scratch arena guaranteed disjoint from dst_alloc so rewinding frame_tmp
+    // on return can never invalidate the returned Array allocated on dst_alloc.
+    ArenaTemp frame_tmp = get_scratch(dst_alloc);
     Array<u8> compressed(frame_tmp.allocator());
     bool saw_terminator = false;
     while (pos < len) {
@@ -384,7 +385,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     // Direct indexed path for opaque full-canvas frame 0 when expand_indexed is false.
     if (opts.page == 0u && !opts.expand_indexed && !f0.has_trans && f0_covers_canvas) {
         KEEL_TRY_ASSIGN(Array<u8> indices,
-                        gif_impl::decode_gif_frame_indices(bytes, f0, opts, dst_alloc, scratch.arena()));
+                        gif_impl::decode_gif_frame_indices(bytes, f0, opts, dst_alloc));
 
         Image img;
         img.width = f0.width;
@@ -432,8 +433,7 @@ Result<Image> decode_gif(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
         ArenaTemp frame_arena_tmp = scratch.arena().begin_temp();
         KEEL_TRY_ASSIGN(Array<u8> indices,
-                        gif_impl::decode_gif_frame_indices(bytes, frame, opts, frame_arena_tmp.allocator(),
-                                                           scratch.arena()));
+                        gif_impl::decode_gif_frame_indices(bytes, frame, opts, frame_arena_tmp.allocator()));
 
         const usize fw = as<usize>(frame.width);
         const usize fh = as<usize>(frame.height);

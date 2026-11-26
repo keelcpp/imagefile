@@ -370,6 +370,13 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
     _, got_fp3 = run_keel_decode(exe, p_fp3, raw)
     assert_exact("pillow->keel:tif_pred3_f32", got_fp3, ref_fp3, stats)
 
+    # TIFF Predictor == 3 with LZW compression (exercises LZW arena isolation + tmp_row allocation)
+    p_fp3_lzw = tmp / "tif_pred3_lzw_f32.tif"
+    Image.fromarray(fp_arr).save(p_fp3_lzw, format="TIFF", compression="tiff_lzw", tiffinfo={317: 3})
+    ref_fp3_lzw = np.array(Image.open(p_fp3_lzw))
+    _, got_fp3_lzw = run_keel_decode(exe, p_fp3_lzw, raw)
+    assert_exact("pillow->keel:tif_pred3_lzw_f32", got_fp3_lzw, ref_fp3_lzw, stats)
+
     # ---- 4. BMP (bit-exact bidirectional, incl. BI_RLE4) ----
     # BI_RLE4 4-bit BMP decoded by BOTH Pillow and keel -> bit-exact!
     rle4_data = bytes([
