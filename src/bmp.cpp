@@ -239,9 +239,10 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     img.palette = Array<u16>(dst_alloc);
     u8* dst = img.pixels.data();
 
-    // BI_RLE8
-    if (hdr.compression == 1u) {
-        if (hdr.bit_count != 8u) [[unlikely]] {
+    // BI_RLE8 (compression == 1) and BI_RLE4 (compression == 2)
+    if (hdr.compression == 1u || hdr.compression == 2u) {
+        const bool is_rle4 = (hdr.compression == 2u);
+        if ((is_rle4 && hdr.bit_count != 4u) || (!is_rle4 && hdr.bit_count != 8u)) [[unlikely]] {
             return ErrorCode::InvalidData;
         }
         ArenaTemp scratch = get_scratch(dst_alloc);
@@ -254,8 +255,16 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             const u8 count = pixel_data[p++];
             const u8 val = pixel_data[p++];
             if (count > 0) {
-                for (usize k = 0; k < count && x < w; ++k) {
-                    indices[y * w + (x++)] = val;
+                if (is_rle4) {
+                    const u8 hi = as<u8>((val >> 4) & 0x0Fu);
+                    const u8 lo = as<u8>(val & 0x0Fu);
+                    for (usize k = 0; k < count && x < w; ++k) {
+                        indices[y * w + (x++)] = ((k & 1u) == 0u) ? hi : lo;
+                    }
+                } else {
+                    for (usize k = 0; k < count && x < w; ++k) {
+                        indices[y * w + (x++)] = val;
+                    }
                 }
             } else if (val == 0u) {
                 x = 0;
@@ -268,11 +277,25 @@ Result<Image> decode_bmp(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 y += pixel_data[p++];
             } else {
                 const usize run = val;
-                for (usize k = 0; k < run && p < pixel_data_len && x < w; ++k) {
-                    indices[y * w + (x++)] = pixel_data[p++];
-                }
-                if ((run & 1u) != 0u && p < pixel_data_len) {
-                    ++p;
+                if (is_rle4) {
+                    const usize byte_count = (run + 1u) / 2u;
+                    for (usize k = 0; k < run && x < w; ++k) {
+                        const usize bi = p + (k >> 1);
+                        if (bi >= pixel_data_len) break;
+                        const u8 b = pixel_data[bi];
+                        indices[y * w + (x++)] = ((k & 1u) == 0u) ? as<u8>((b >> 4) & 0x0Fu) : as<u8>(b & 0x0Fu);
+                    }
+                    p += (byte_count <= pixel_data_len - p) ? byte_count : (pixel_data_len - p);
+                    if ((byte_count & 1u) != 0u && p < pixel_data_len) {
+                        ++p;
+                    }
+                } else {
+                    for (usize k = 0; k < run && p < pixel_data_len && x < w; ++k) {
+                        indices[y * w + (x++)] = pixel_data[p++];
+                    }
+                    if ((run & 1u) != 0u && p < pixel_data_len) {
+                        ++p;
+                    }
                 }
             }
         }

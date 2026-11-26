@@ -225,11 +225,36 @@ void append_chunk(Array<u8>& out, const char type[4], const u8* payload, usize p
 Result<ImageInfo> peek_png(ArrayRef<u8> bytes) {
     KEEL_TRY_ASSIGN(const png_impl::PngIhdr ihdr, png_impl::parse_ihdr(bytes));
 
+    u16 channels = png_impl::color_type_channels(ihdr.color_type);
+    if (ihdr.color_type == 0u || ihdr.color_type == 2u) {
+        const u8* data = bytes.data();
+        const usize len = bytes.size();
+        usize offset = 8u;
+        while (offset + 12u <= len) {
+            const usize chunk_len = as<usize>(detail::read_u32_be(data + offset));
+            if (len - offset - 12u < chunk_len) {
+                break;
+            }
+            const u8* chunk_type = data + offset + 4u;
+            if (mem_eq(chunk_type, "tRNS", 4)) {
+                const usize expected_len = (ihdr.color_type == 0u) ? 2u : 6u;
+                if (chunk_len == expected_len) {
+                    channels = as<u16>(channels + 1u);
+                }
+                break;
+            }
+            if (mem_eq(chunk_type, "IDAT", 4) || mem_eq(chunk_type, "IEND", 4)) {
+                break;
+            }
+            offset += 12u + chunk_len;
+        }
+    }
+
     ImageInfo info;
     info.format = ImageFormat::Png;
     info.width = ihdr.width;
     info.height = ihdr.height;
-    info.channels = png_impl::color_type_channels(ihdr.color_type);
+    info.channels = channels;
     info.bits_per_sample = ihdr.bit_depth;
     info.sample_type = (ihdr.bit_depth == 16u) ? SampleType::U16 : SampleType::U8;
     info.has_palette = (ihdr.color_type == 3u);
@@ -242,7 +267,7 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     const u16 channels = png_impl::color_type_channels(ihdr.color_type);
     const SampleType sample_type = (ihdr.bit_depth == 16u) ? SampleType::U16 : SampleType::U8;
-    KEEL_TRY_ASSIGN(const usize out_bytes,
+    KEEL_TRY_ASSIGN(const usize base_out_bytes,
                     detail::validate_decode_allocation(ihdr.width, ihdr.height, channels, sample_type, opts));
 
     Allocator* dst_alloc = opts.allocator ? opts.allocator : default_allocator();
@@ -250,7 +275,10 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
 
     Array<u8> idat_stream(scratch.allocator());
     Array<u16> palette(dst_alloc);
+    Array<u8> trns_alpha(scratch.allocator());
     bool saw_plte = false;
+    bool saw_trns = false;
+    u16 trns_key[3] = {0, 0, 0};
     bool saw_iend = false;
 
     const u8* data = bytes.data();
@@ -285,6 +313,37 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 palette[i] = as<u16>(chunk_data[i]);
             }
             saw_plte = true;
+        } else if (mem_eq(chunk_type, "tRNS", 4)) {
+            if (saw_trns) [[unlikely]] {
+                return ErrorCode::InvalidData;
+            }
+            if (ihdr.color_type == 0u) {
+                if (chunk_len != 2u) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+                trns_key[0] = detail::read_u16_be(chunk_data);
+                saw_trns = true;
+            } else if (ihdr.color_type == 2u) {
+                if (chunk_len != 6u) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+                trns_key[0] = detail::read_u16_be(chunk_data + 0u);
+                trns_key[1] = detail::read_u16_be(chunk_data + 2u);
+                trns_key[2] = detail::read_u16_be(chunk_data + 4u);
+                saw_trns = true;
+            } else if (ihdr.color_type == 3u) {
+                if (!saw_plte || chunk_len > palette.size() / 3u) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+                trns_alpha.resize(chunk_len);
+                if (chunk_len > 0) {
+                    mem_copy(trns_alpha.data(), chunk_data, chunk_len);
+                }
+                saw_trns = true;
+            } else {
+                // tRNS is forbidden for color types that already have an alpha channel (4, 6).
+                return ErrorCode::InvalidData;
+            }
         } else if (mem_eq(chunk_type, "IDAT", 4)) {
             idat_stream.append(ArrayRef<u8>(chunk_data, chunk_len));
         } else if (mem_eq(chunk_type, "IEND", 4)) {
@@ -306,6 +365,14 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     }
     if (ihdr.color_type == 3u && !saw_plte) [[unlikely]] {
         return ErrorCode::InvalidData;
+    }
+
+    const bool apply_key_trns = saw_trns && (ihdr.color_type == 0u || ihdr.color_type == 2u);
+    const bool apply_pal_trns = saw_trns && ihdr.color_type == 3u && opts.expand_indexed;
+    if (apply_key_trns) {
+        KEEL_TRY(detail::validate_decode_allocation(ihdr.width, ihdr.height, as<u16>(channels + 1u), sample_type, opts));
+    } else if (apply_pal_trns) {
+        KEEL_TRY(detail::validate_decode_allocation(ihdr.width, ihdr.height, 4u, SampleType::U8, opts));
     }
 
     const usize w = as<usize>(ihdr.width);
@@ -358,12 +425,15 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         return ErrorCode::InvalidData;
     }
 
+    const bool need_post_expand = apply_key_trns || (opts.expand_indexed && ihdr.color_type == 3u);
+    Allocator* base_alloc = need_post_expand ? scratch.allocator() : dst_alloc;
+
     Image img;
     img.width = ihdr.width;
     img.height = ihdr.height;
     img.channels = channels;
     img.sample_type = sample_type;
-    img.pixels = Array<u8>(out_bytes, u8{0}, dst_alloc);
+    img.pixels = Array<u8>(base_out_bytes, u8{0}, base_alloc);
     if (ihdr.color_type == 3u) {
         img.palette = keel::move(palette);
         img.palette_bits = 8;
@@ -394,6 +464,102 @@ Result<Image> decode_png(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         png_impl::scatter_pass_pixels(pass_unfiltered.data(), pw, ph, row_bytes, x0, dx, y0, dy, ihdr, channels,
                                       img.pixels.data());
         raw_pos += (row_bytes + 1u) * ph;
+    }
+
+    const usize npix = w * h;
+
+    // Apply tRNS color-key transparency for grayscale (type 0 -> GA) and RGB (type 2 -> RGBA).
+    if (apply_key_trns) {
+        const u16 out_ch = as<u16>(channels + 1u);
+        const usize bps = (sample_type == SampleType::U16) ? 2u : 1u;
+        Image out;
+        out.width = ihdr.width;
+        out.height = ihdr.height;
+        out.channels = out_ch;
+        out.sample_type = sample_type;
+        out.palette = Array<u16>(dst_alloc);
+        out.palette_bits = 0;
+        out.pixels = Array<u8>(npix * as<usize>(out_ch) * bps, u8{0}, dst_alloc);
+
+        const u8* sp = img.pixels.data();
+        u8* dp = out.pixels.data();
+
+        if (ihdr.color_type == 0u) {
+            if (sample_type == SampleType::U16) {
+                for (usize i = 0; i < npix; ++i) {
+                    const u16 g = detail::read_u16_native(sp + i * 2u);
+                    const u16 a = (g == trns_key[0]) ? u16{0} : u16{65535};
+                    detail::write_u16_native(dp + i * 4u + 0u, g);
+                    detail::write_u16_native(dp + i * 4u + 2u, a);
+                }
+            } else {
+                const u32 max_raw = (1u << ihdr.bit_depth) - 1u;
+                const bool key_valid = (as<u32>(trns_key[0]) <= max_raw);
+                const u8 key_scaled =
+                    key_valid ? as<u8>((as<u32>(trns_key[0]) * 255u) / max_raw) : u8{0};
+                for (usize i = 0; i < npix; ++i) {
+                    const u8 g = sp[i];
+                    dp[i * 2u + 0u] = g;
+                    dp[i * 2u + 1u] = (key_valid && g == key_scaled) ? u8{0} : u8{255};
+                }
+            }
+        } else {
+            if (sample_type == SampleType::U16) {
+                for (usize i = 0; i < npix; ++i) {
+                    const u16 r = detail::read_u16_native(sp + i * 6u + 0u);
+                    const u16 g = detail::read_u16_native(sp + i * 6u + 2u);
+                    const u16 b = detail::read_u16_native(sp + i * 6u + 4u);
+                    const bool match = (r == trns_key[0] && g == trns_key[1] && b == trns_key[2]);
+                    detail::write_u16_native(dp + i * 8u + 0u, r);
+                    detail::write_u16_native(dp + i * 8u + 2u, g);
+                    detail::write_u16_native(dp + i * 8u + 4u, b);
+                    detail::write_u16_native(dp + i * 8u + 6u, match ? u16{0} : u16{65535});
+                }
+            } else {
+                const bool key_valid = (trns_key[0] <= 255u && trns_key[1] <= 255u && trns_key[2] <= 255u);
+                const u8 kr = as<u8>(trns_key[0] & 0xFFu);
+                const u8 kg = as<u8>(trns_key[1] & 0xFFu);
+                const u8 kb = as<u8>(trns_key[2] & 0xFFu);
+                for (usize i = 0; i < npix; ++i) {
+                    const u8 r = sp[i * 3u + 0u];
+                    const u8 g = sp[i * 3u + 1u];
+                    const u8 b = sp[i * 3u + 2u];
+                    const bool match = (key_valid && r == kr && g == kg && b == kb);
+                    dp[i * 4u + 0u] = r;
+                    dp[i * 4u + 1u] = g;
+                    dp[i * 4u + 2u] = b;
+                    dp[i * 4u + 3u] = match ? u8{0} : u8{255};
+                }
+            }
+        }
+        return out;
+    }
+
+    // Apply PLTE + tRNS indexed RGBA expansion when expand_indexed is requested.
+    if (apply_pal_trns && img.has_palette()) {
+        Image out;
+        out.width = ihdr.width;
+        out.height = ihdr.height;
+        out.channels = 4u;
+        out.sample_type = SampleType::U8;
+        out.palette = Array<u16>(dst_alloc);
+        out.palette_bits = 0;
+        out.pixels = Array<u8>(npix * 4u, u8{0}, dst_alloc);
+
+        const usize pal_entries = img.palette.size() / 3u;
+        const u16* pal = img.palette.data();
+        const u8* sp = img.pixels.data();
+        u8* dp = out.pixels.data();
+        for (usize i = 0; i < npix; ++i) {
+            const usize idx = as<usize>(sp[i]);
+            if (idx < pal_entries) {
+                dp[i * 4u + 0u] = as<u8>(pal[idx * 3u + 0u] & 0xFFu);
+                dp[i * 4u + 1u] = as<u8>(pal[idx * 3u + 1u] & 0xFFu);
+                dp[i * 4u + 2u] = as<u8>(pal[idx * 3u + 2u] & 0xFFu);
+            }
+            dp[i * 4u + 3u] = (idx < trns_alpha.size()) ? trns_alpha[idx] : u8{255};
+        }
+        return out;
     }
 
     if (opts.expand_indexed && img.has_palette()) {

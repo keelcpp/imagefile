@@ -664,6 +664,35 @@ void apply_horizontal_undiff(u8* buf, usize height, usize width, usize spp, usiz
     }
 }
 
+void apply_float_predictor_undiff(u8* buf, usize height, usize width, usize spp, usize bps, u8* tmp_row) noexcept {
+    // Adobe TIFF Technical Note 3: per row, undo horizontal byte differencing with stride `spp`,
+    // then re-interleave MSB-first byte planes into native-endian IEEE 754 floating-point samples.
+    const usize num_samples = width * spp;
+    const usize row_bytes = num_samples * bps;
+    const bool host_be = detail::is_host_big_endian();
+
+    for (usize r = 0; r < height; ++r) {
+        u8* row = buf + r * row_bytes;
+        for (usize i = spp; i < row_bytes; ++i) {
+            row[i] = as<u8>(row[i] + row[i - spp]);
+        }
+        mem_copy(tmp_row, row, row_bytes);
+        if (host_be) {
+            for (usize s = 0; s < num_samples; ++s) {
+                for (usize b = 0; b < bps; ++b) {
+                    row[s * bps + b] = tmp_row[b * num_samples + s];
+                }
+            }
+        } else {
+            for (usize s = 0; s < num_samples; ++s) {
+                for (usize b = 0; b < bps; ++b) {
+                    row[s * bps + (bps - 1u - b)] = tmp_row[b * num_samples + s];
+                }
+            }
+        }
+    }
+}
+
 void unpack_subbyte_row(const u8* src, u8* dst, usize width, u16 bits_per_sample) noexcept {
     const u8 mask = as<u8>((1u << bits_per_sample) - 1u);
     for (usize x = 0; x < width; ++x) {
@@ -1139,12 +1168,15 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     if (timg.planar_config != 1u && timg.planar_config != 2u) [[unlikely]] {
         return ErrorCode::InvalidData;
     }
-    if (timg.predictor != 1u && timg.predictor != 2u) [[unlikely]] {
+    if (timg.predictor != 1u && timg.predictor != 2u && timg.predictor != 3u) [[unlikely]] {
         return ErrorCode::NotSupported;
     }
 
     KEEL_TRY_ASSIGN(const SampleType sample_type,
                     tiff_impl::resolve_sample_type(timg.sample_format, timg.bits_per_sample));
+    if (timg.predictor == 3u && sample_type != SampleType::F32 && sample_type != SampleType::F64) [[unlikely]] {
+        return ErrorCode::NotSupported;
+    }
     const bool subbyte = (timg.bits_per_sample < 8u);
     if (subbyte && (timg.samples_per_pixel != 1u || timg.predictor != 1u)) [[unlikely]] {
         return ErrorCode::NotSupported;
@@ -1272,6 +1304,9 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     }
                     if (timg.predictor == 2u) {
                         tiff_impl::apply_horizontal_undiff(tile.data(), tl, tw, spp_block, bps, br.big_endian);
+                    } else if (timg.predictor == 3u) {
+                        Array<u8> tmp_row(src_stride, u8{0}, tile_tmp.allocator());
+                        tiff_impl::apply_float_predictor_undiff(tile.data(), tl, tw, spp_block, bps, tmp_row.data());
                     }
                     const usize r0 = ty * tl;
                     const usize c0 = tx * tw;
@@ -1316,6 +1351,9 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 }
                 if (timg.predictor == 2u) {
                     tiff_impl::apply_horizontal_undiff(strip.data(), rh, W, spp_block, bps, br.big_endian);
+                } else if (timg.predictor == 3u) {
+                    Array<u8> tmp_row(src_stride, u8{0}, strip_tmp.allocator());
+                    tiff_impl::apply_float_predictor_undiff(strip.data(), rh, W, spp_block, bps, tmp_row.data());
                 }
                 if (planar) {
                     put_planar(strip.data(), r0, 0u, rh, W, p, src_stride);
@@ -1327,7 +1365,8 @@ Result<Image> decode_tiff(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     }
 
     // Convert multi-byte samples from TIFF endianness to native host endianness if needed.
-    if (bps > 1u && br.big_endian != detail::is_host_big_endian()) {
+    // Predictor == 3 outputs directly in native host endianness from MSB-first byte planes.
+    if (bps > 1u && timg.predictor != 3u && br.big_endian != detail::is_host_big_endian()) {
         const usize total_samples = H * W * S;
         if (bps == 2u) {
             for (usize i = 0; i < total_samples; ++i) {

@@ -1,6 +1,7 @@
 #include "keel/imagefile.h"
 
 #include "keel/arena.h"
+#include "keel/compress.h"
 #include "keel/format.h"
 #include "keel/fs.h"
 #include "keel/math.h"
@@ -1497,6 +1498,354 @@ const char* format_name(ImageFormat f) noexcept {
     return "unknown";
 }
 
+void test_spec_completeness() {
+    // 1. PNG tRNS chunk (grayscale 8-bit & 16-bit, RGB 8-bit, indexed PLTE+tRNS, invalid tRNS rejection)
+    {
+        auto inject_trns_before_idat = [](ArrayRef<u8> png, const u8* payload, usize plen) -> Array<u8> {
+            Array<u8> out;
+            // Locate IDAT chunk offset (after 8-byte signature + IHDR [+ PLTE])
+            usize pos = 8u;
+            while (pos + 12u <= png.size()) {
+                const u32 clen = (keel::as<u32>(png[pos]) << 24) | (keel::as<u32>(png[pos + 1u]) << 16) |
+                                 (keel::as<u32>(png[pos + 2u]) << 8) | keel::as<u32>(png[pos + 3u]);
+                if (png[pos + 4u] == 'I' && png[pos + 5u] == 'D' && png[pos + 6u] == 'A' && png[pos + 7u] == 'T') {
+                    break;
+                }
+                pos += 12u + keel::as<usize>(clen);
+            }
+            out.append(ArrayRef<u8>(png.data(), pos));
+            // Write tRNS chunk
+            const u32 p32 = keel::as<u32>(plen);
+            out.push_back(keel::as<u8>((p32 >> 24) & 0xFFu));
+            out.push_back(keel::as<u8>((p32 >> 16) & 0xFFu));
+            out.push_back(keel::as<u8>((p32 >> 8) & 0xFFu));
+            out.push_back(keel::as<u8>(p32 & 0xFFu));
+            const usize tpos = out.size();
+            out.push_back('t');
+            out.push_back('R');
+            out.push_back('N');
+            out.push_back('S');
+            if (plen > 0) out.append(ArrayRef<u8>(payload, plen));
+            const u32 crc = keel::compress::crc32(out.slice(tpos, 4u + plen));
+            out.push_back(keel::as<u8>((crc >> 24) & 0xFFu));
+            out.push_back(keel::as<u8>((crc >> 16) & 0xFFu));
+            out.push_back(keel::as<u8>((crc >> 8) & 0xFFu));
+            out.push_back(keel::as<u8>(crc & 0xFFu));
+            out.append(ArrayRef<u8>(png.data() + pos, png.size() - pos));
+            return out;
+        };
+
+        // 1a. Grayscale 8-bit + tRNS key=42 -> 2-ch GA
+        const u8 g8[4] = {10u, 42u, 200u, 42u};
+        auto base_g8 = encode_png(ImageView{2, 2, 1, SampleType::U8, 0, ArrayRef<u8>(g8, 4)});
+        TEST_CHECK(base_g8.is_ok());
+        if (base_g8) {
+            const u8 trns[2] = {0u, 42u};
+            Array<u8> png_trns = inject_trns_before_idat(*base_g8, trns, 2u);
+            auto info = peek_png(png_trns);
+            TEST_CHECK(info.is_ok() && info->channels == 2u);
+            auto dec = decode_png(png_trns);
+            TEST_CHECK(dec.is_ok() && dec->channels == 2u && dec->sample_type == SampleType::U8);
+            if (dec) {
+                TEST_CHECK(dec->pixels[0] == 10u && dec->pixels[1] == 255u);
+                TEST_CHECK(dec->pixels[2] == 42u && dec->pixels[3] == 0u);
+                TEST_CHECK(dec->pixels[4] == 200u && dec->pixels[5] == 255u);
+                TEST_CHECK(dec->pixels[6] == 42u && dec->pixels[7] == 0u);
+            }
+            // Wrong tRNS length for grayscale (3 bytes) must fail
+            const u8 bad_trns[3] = {0u, 42u, 0u};
+            Array<u8> bad_png = inject_trns_before_idat(*base_g8, bad_trns, 3u);
+            TEST_CHECK(decode_png(bad_png).is_err());
+        }
+
+        // 1b. Grayscale 16-bit + tRNS key=0x1234 -> 2-ch U16 GA
+        const u16 g16[2] = {0x1234u, 0xABCDu};
+        auto base_g16 =
+            encode_png(ImageView{2, 1, 1, SampleType::U16, 0, ArrayRef<u8>(reinterpret_cast<const u8*>(g16), 4)});
+        TEST_CHECK(base_g16.is_ok());
+        if (base_g16) {
+            const u8 trns16[2] = {0x12u, 0x34u};
+            Array<u8> png_trns = inject_trns_before_idat(*base_g16, trns16, 2u);
+            auto dec = decode_png(png_trns);
+            TEST_CHECK(dec.is_ok() && dec->channels == 2u && dec->sample_type == SampleType::U16);
+            if (dec) {
+                const u16* out16 = reinterpret_cast<const u16*>(dec->pixels.data());
+                TEST_CHECK(out16[0] == 0x1234u && out16[1] == 0u);
+                TEST_CHECK(out16[2] == 0xABCDu && out16[3] == 65535u);
+            }
+        }
+
+        // 1c. RGB 8-bit + tRNS key=(10,20,30) -> 4-ch RGBA
+        const u8 rgb8[6] = {10u, 20u, 30u, 10u, 20u, 31u};
+        auto base_rgb = encode_png(ImageView{2, 1, 3, SampleType::U8, 0, ArrayRef<u8>(rgb8, 6)});
+        TEST_CHECK(base_rgb.is_ok());
+        if (base_rgb) {
+            const u8 trns_rgb[6] = {0u, 10u, 0u, 20u, 0u, 30u};
+            Array<u8> png_trns = inject_trns_before_idat(*base_rgb, trns_rgb, 6u);
+            auto info = peek_png(png_trns);
+            TEST_CHECK(info.is_ok() && info->channels == 4u);
+            auto dec = decode_png(png_trns);
+            TEST_CHECK(dec.is_ok() && dec->channels == 4u);
+            if (dec) {
+                TEST_CHECK(dec->pixels[0] == 10u && dec->pixels[1] == 20u && dec->pixels[2] == 30u &&
+                           dec->pixels[3] == 0u);
+                TEST_CHECK(dec->pixels[4] == 10u && dec->pixels[5] == 20u && dec->pixels[6] == 31u &&
+                           dec->pixels[7] == 255u);
+            }
+        }
+
+        // 1d. Indexed PLTE + tRNS -> 4-ch RGBA when expand_indexed=true
+        const u8 idx[3] = {0u, 1u, 2u};
+        const u16 pal[9] = {255u, 0u, 0u, 0u, 255u, 0u, 0u, 0u, 255u};
+        auto base_pal = encode_png(ImageView{3, 1, 1, SampleType::U8, 0, ArrayRef<u8>(idx, 3)},
+                                   PngEncodeOptions{.palette = ArrayRef<u16>(pal, 9)});
+        TEST_CHECK(base_pal.is_ok());
+        if (base_pal) {
+            const u8 trns_pal[2] = {0u, 128u}; // index 2 defaults to 255
+            Array<u8> png_trns = inject_trns_before_idat(*base_pal, trns_pal, 2u);
+            auto dec = decode_png(png_trns, ImageDecodeOptions{.expand_indexed = true});
+            TEST_CHECK(dec.is_ok() && dec->channels == 4u);
+            if (dec) {
+                TEST_CHECK(dec->pixels[0] == 255u && dec->pixels[3] == 0u);
+                TEST_CHECK(dec->pixels[5] == 255u && dec->pixels[7] == 128u);
+                TEST_CHECK(dec->pixels[10] == 255u && dec->pixels[11] == 255u);
+            }
+        }
+
+        // 1e. tRNS on RGBA (color_type=6) must be rejected per PNG spec
+        const u8 rgba8[4] = {1u, 2u, 3u, 4u};
+        auto base_rgba = encode_png(ImageView{1, 1, 4, SampleType::U8, 0, ArrayRef<u8>(rgba8, 4)});
+        if (base_rgba) {
+            const u8 trns1[1] = {0u};
+            Array<u8> bad = inject_trns_before_idat(*base_rgba, trns1, 1u);
+            TEST_CHECK(decode_png(bad).is_err());
+        }
+    }
+
+    // 2. BMP BI_RLE4 (compression == 2, bit_count == 4): encoded runs, odd/even absolute runs, EOL, delta, EOB
+    {
+        Array<u8> rle;
+        // Bottom row (y=0 in BMP -> row 1 in top-down output): encoded run 4 of (hi=1, lo=2) -> [1,2,1,2], absolute 3 -> [3,4,5] + pad? byte_count=2 (even -> NO pad), EOL
+        rle.push_back(4u); rle.push_back(0x12u); // 4 pixels: 1,2,1,2
+        rle.push_back(0u); rle.push_back(3u);    // absolute 3 pixels -> 2 bytes (even, no pad)
+        rle.push_back(0x34u); rle.push_back(0x50u);
+        rle.push_back(0u); rle.push_back(0u);    // EOL
+        // Top row (y=1 in BMP -> row 0 in output): delta (+1, +0), absolute 5 pixels -> 3 bytes (odd -> +1 pad byte!), encoded 1 of (6,0), EOB
+        rle.push_back(0u); rle.push_back(2u); rle.push_back(1u); rle.push_back(0u); // delta dx=1, dy=0 -> x=0 stays 0
+        rle.push_back(0u); rle.push_back(5u); // absolute 5 pixels: 1,2,3,4,5 (3 bytes + 1 pad)
+        rle.push_back(0x12u); rle.push_back(0x34u); rle.push_back(0x50u); rle.push_back(0x00u);
+        rle.push_back(1u); rle.push_back(0x60u); // 1 pixel: 6
+        rle.push_back(0u); rle.push_back(1u);    // EOB
+
+        const u32 pal_entries = 16u;
+        const u32 off_bits = 14u + 40u + pal_entries * 4u;
+        const u32 file_size = off_bits + keel::as<u32>(rle.size());
+        Array<u8> bmp;
+        auto push16 = [&](u16 v) { bmp.push_back(keel::as<u8>(v & 0xFFu)); bmp.push_back(keel::as<u8>((v >> 8) & 0xFFu)); };
+        auto push32 = [&](u32 v) {
+            bmp.push_back(keel::as<u8>(v & 0xFFu));
+            bmp.push_back(keel::as<u8>((v >> 8) & 0xFFu));
+            bmp.push_back(keel::as<u8>((v >> 16) & 0xFFu));
+            bmp.push_back(keel::as<u8>((v >> 24) & 0xFFu));
+        };
+        bmp.push_back('B'); bmp.push_back('M');
+        push32(file_size); push16(0u); push16(0u); push32(off_bits);
+        push32(40u); push32(7u); push32(2u); push16(1u); push16(4u);
+        push32(2u); // BI_RLE4
+        push32(keel::as<u32>(rle.size())); push32(2835u); push32(2835u); push32(pal_entries); push32(0u);
+        for (u32 i = 0; i < pal_entries; ++i) {
+            bmp.push_back(keel::as<u8>(i * 10u));       // B
+            bmp.push_back(keel::as<u8>(i * 15u));       // G
+            bmp.push_back(keel::as<u8>(i * 17u));       // R
+            bmp.push_back(0u);
+        }
+        bmp.append(rle);
+
+        auto dec = decode_bmp(bmp);
+        TEST_CHECK(dec.is_ok() && dec->width == 7u && dec->height == 2u && dec->channels == 3u);
+        if (dec) {
+            const u8 exp_row0[7] = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+            const u8 exp_row1[7] = {1u, 2u, 1u, 2u, 3u, 4u, 5u};
+            for (usize c = 0; c < 7u; ++c) {
+                TEST_CHECK(dec->pixels[c * 3u + 0u] == keel::as<u8>(exp_row0[c] * 17u));
+                TEST_CHECK(dec->pixels[(7u + c) * 3u + 0u] == keel::as<u8>(exp_row1[c] * 17u));
+            }
+        }
+    }
+
+    // 3. TIFF Predictor == 3 (Floating-Point Predictor) for F32 & F64
+    {
+        auto build_fp_pred3_tiff = [](u32 w, u32 h, u16 spp, u16 bps, const u8* host_bytes) -> Array<u8> {
+            const usize num_s = keel::as<usize>(w) * keel::as<usize>(spp);
+            const usize row_bytes = num_s * keel::as<usize>(bps);
+            Array<u8> encoded_rows;
+            encoded_rows.reserve(keel::as<usize>(h) * row_bytes);
+            Array<u8> plane_row(row_bytes, u8{0});
+            for (u32 r = 0; r < h; ++r) {
+                const u8* srow = host_bytes + keel::as<usize>(r) * row_bytes;
+                // Little-endian host -> MSB-first byte planes
+                for (usize s = 0; s < num_s; ++s) {
+                    for (usize b = 0; b < bps; ++b) {
+                        plane_row[b * num_s + s] = srow[s * bps + (bps - 1u - b)];
+                    }
+                }
+                // Horizontal differencing with stride spp
+                for (usize i = row_bytes; i-- > spp;) {
+                    plane_row[i] = keel::as<u8>(plane_row[i] - plane_row[i - spp]);
+                }
+                encoded_rows.append(plane_row);
+            }
+            Array<u8> comp = keel::compress::zlib_compress(encoded_rows, 6);
+            Array<u8> out;
+            auto push16 = [&](u16 v) { out.push_back(keel::as<u8>(v & 0xFFu)); out.push_back(keel::as<u8>((v >> 8) & 0xFFu)); };
+            auto push32 = [&](u32 v) {
+                out.push_back(keel::as<u8>(v & 0xFFu));
+                out.push_back(keel::as<u8>((v >> 8) & 0xFFu));
+                out.push_back(keel::as<u8>((v >> 16) & 0xFFu));
+                out.push_back(keel::as<u8>((v >> 24) & 0xFFu));
+            };
+            out.push_back('I'); out.push_back('I'); push16(42u); push32(8u);
+            const u16 num_tags = 11u;
+            const u32 bps_off = 8u + 2u + keel::as<u32>(num_tags) * 12u + 4u;
+            const u32 extra_bps_bytes = (spp > 2u) ? (keel::as<u32>(spp) * 2u) : 0u;
+            const u32 strip_off = bps_off + extra_bps_bytes;
+            push16(num_tags);
+            auto tag = [&](u16 id, u16 ty, u32 cnt, u32 val) { push16(id); push16(ty); push32(cnt); push32(val); };
+            tag(256u, 4u, 1u, w);
+            tag(257u, 4u, 1u, h);
+            if (spp == 1u) {
+                tag(258u, 3u, 1u, keel::as<u32>(bps) * 8u);
+            } else {
+                tag(258u, 3u, spp, bps_off);
+            }
+            tag(259u, 3u, 1u, 8u); // Deflate
+            tag(262u, 3u, 1u, (spp == 3u) ? 2u : 1u);
+            tag(273u, 4u, 1u, strip_off);
+            tag(277u, 3u, 1u, spp);
+            tag(278u, 4u, 1u, h);
+            tag(279u, 4u, 1u, keel::as<u32>(comp.size()));
+            tag(317u, 3u, 1u, 3u); // Predictor == 3
+            tag(339u, 3u, 1u, 3u); // SampleFormat == IEEEFP
+            push32(0u);
+            if (spp > 2u) {
+                for (u16 s = 0; s < spp; ++s) push16(keel::as<u16>(bps * 8u));
+            }
+            out.append(comp);
+            return out;
+        };
+
+        const f32 f32_src[12] = {1.25f, -3.5f, 0.0f, 42.125f, -0.0625f, 100.5f,
+                                 3.14159f, -2.71828f, 1e-4f, -1e4f, 65536.0f, -0.5f};
+        Array<u8> tif32 = build_fp_pred3_tiff(2u, 2u, 3u, 4u, reinterpret_cast<const u8*>(f32_src));
+        auto dec32 = decode_tiff(tif32);
+        TEST_CHECK(dec32.is_ok() && dec32->sample_type == SampleType::F32 && dec32->channels == 3u);
+        if (dec32) {
+            const f32* got = reinterpret_cast<const f32*>(dec32->pixels.data());
+            for (usize i = 0; i < 12u; ++i) {
+                TEST_CHECK(got[i] == f32_src[i]);
+            }
+        }
+
+        const f64 f64_src[6] = {1.234567890123, -987654.3210987, 0.0, 1e-100, -1e100, 3.141592653589793};
+        Array<u8> tif64 = build_fp_pred3_tiff(3u, 2u, 1u, 8u, reinterpret_cast<const u8*>(f64_src));
+        auto dec64 = decode_tiff(tif64);
+        TEST_CHECK(dec64.is_ok() && dec64->sample_type == SampleType::F64 && dec64->channels == 1u);
+        if (dec64) {
+            const f64* got = reinterpret_cast<const f64*>(dec64->pixels.data());
+            for (usize i = 0; i < 6u; ++i) {
+                TEST_CHECK(got[i] == f64_src[i]);
+            }
+        }
+    }
+
+    // 4. Multi-frame GIF with GCE transparency & disposal methods (1=keep, 2=bg, 3=prev)
+    {
+        // Build a 3-frame 2x2 animated GIF89a:
+        // Palette: 0=(0,0,0), 1=(255,0,0), 2=(0,255,0), 3=(0,0,255)
+        // Frame 0 (full 2x2, disposal=1 keep): [1,1; 1,1] (solid red)
+        // Frame 1 (1x1 at (1,0), disposal=2 restore-bg, trans=0): [2] (green at (1,0)) -> after frame 1, (1,0) becomes transparent!
+        // Frame 2 (1x1 at (0,1), disposal=1, trans=0): [3] (blue at (0,1)) -> (0,0)=red, (1,0)=transparent(0,0,0,0), (0,1)=blue, (1,1)=red!
+        Array<u8> gif;
+        gif.append(ArrayRef<u8>(reinterpret_cast<const u8*>("GIF89a"), 6));
+        gif.push_back(2u); gif.push_back(0u); // canvas_w = 2
+        gif.push_back(2u); gif.push_back(0u); // canvas_h = 2
+        gif.push_back(0x91u);                 // GCT flag, 4 colors
+        gif.push_back(0u); gif.push_back(0u);
+        const u8 gct[12] = {0u, 0u, 0u, 255u, 0u, 0u, 0u, 255u, 0u, 0u, 0u, 255u};
+        gif.append(ArrayRef<u8>(gct, 12));
+
+        auto append_frame = [&](u16 l, u16 t, u16 w, u16 h, u8 disposal, bool has_trans, u8 trans_idx,
+                                ArrayRef<u8> px) {
+            // GCE
+            gif.push_back(0x21u); gif.push_back(0xF9u); gif.push_back(4u);
+            gif.push_back(keel::as<u8>((disposal << 2) | (has_trans ? 1u : 0u)));
+            gif.push_back(0u); gif.push_back(0u);
+            gif.push_back(trans_idx);
+            gif.push_back(0u);
+            // Image descriptor
+            gif.push_back(0x2Cu);
+            gif.push_back(keel::as<u8>(l & 0xFFu)); gif.push_back(keel::as<u8>((l >> 8) & 0xFFu));
+            gif.push_back(keel::as<u8>(t & 0xFFu)); gif.push_back(keel::as<u8>((t >> 8) & 0xFFu));
+            gif.push_back(keel::as<u8>(w & 0xFFu)); gif.push_back(keel::as<u8>((w >> 8) & 0xFFu));
+            gif.push_back(keel::as<u8>(h & 0xFFu)); gif.push_back(keel::as<u8>((h >> 8) & 0xFFu));
+            gif.push_back(0u);
+            // Uncompressed LZW (min_code_size=2, 3-bit codes: Clear=4, px..., End=5)
+            gif.push_back(2u);
+            Array<u8> lzw_bytes;
+            u32 bit_buf = 0;
+            i32 bit_cnt = 0;
+            auto push_code = [&](u32 code) {
+                bit_buf |= (code << bit_cnt);
+                bit_cnt += 3;
+                while (bit_cnt >= 8) {
+                    lzw_bytes.push_back(keel::as<u8>(bit_buf & 0xFFu));
+                    bit_buf >>= 8;
+                    bit_cnt -= 8;
+                }
+            };
+            push_code(4u);
+            for (usize i = 0; i < px.size(); ++i) {
+                push_code(px[i]);
+                push_code(4u); // reset keeps code_size at 3
+            }
+            push_code(5u);
+            if (bit_cnt > 0) lzw_bytes.push_back(keel::as<u8>(bit_buf & 0xFFu));
+            gif.push_back(keel::as<u8>(lzw_bytes.size()));
+            gif.append(lzw_bytes);
+            gif.push_back(0u);
+        };
+
+        const u8 f0[4] = {1u, 1u, 1u, 1u};
+        const u8 f1[1] = {2u};
+        const u8 f2[1] = {3u};
+        append_frame(0u, 0u, 2u, 2u, 1u, false, 0u, ArrayRef<u8>(f0, 4));
+        append_frame(1u, 0u, 1u, 1u, 2u, true, 0u, ArrayRef<u8>(f1, 1));
+        append_frame(0u, 1u, 1u, 1u, 1u, true, 0u, ArrayRef<u8>(f2, 1));
+        gif.push_back(0x3Bu);
+
+        auto info = peek_gif(gif);
+        TEST_CHECK(info.is_ok() && info->page_count == 3u && info->width == 2u && info->height == 2u);
+
+        auto d1 = decode_gif(gif, ImageDecodeOptions{.page = 1u});
+        TEST_CHECK(d1.is_ok() && d1->channels == 4u);
+        if (d1) {
+            // (0,0)=red, (1,0)=green, (0,1)=red, (1,1)=red
+            TEST_CHECK(d1->pixels[0] == 255u && d1->pixels[3] == 255u);
+            TEST_CHECK(d1->pixels[5] == 255u && d1->pixels[7] == 255u);
+        }
+        auto d2 = decode_gif(gif, ImageDecodeOptions{.page = 2u});
+        TEST_CHECK(d2.is_ok() && d2->channels == 4u);
+        if (d2) {
+            // (0,0)=red, (1,0)=cleared to transparent(0,0,0,0), (0,1)=blue, (1,1)=red
+            TEST_CHECK(d2->pixels[0] == 255u && d2->pixels[3] == 255u);
+            TEST_CHECK(d2->pixels[4] == 0u && d2->pixels[5] == 0u && d2->pixels[6] == 0u && d2->pixels[7] == 0u);
+            TEST_CHECK(d2->pixels[10] == 255u && d2->pixels[11] == 255u);
+            TEST_CHECK(d2->pixels[12] == 255u && d2->pixels[15] == 255u);
+        }
+        TEST_CHECK(decode_gif(gif, ImageDecodeOptions{.page = 3u}).is_err());
+    }
+}
+
 const char* sample_type_name(SampleType st) noexcept {
     switch (st) {
         case SampleType::U8: return "u8";
@@ -1707,6 +2056,7 @@ int main(int argc, char** argv) {
     test_tiff_roundtrips();
     test_file_io_and_robustness();
     test_hardening_regressions();
+    test_spec_completeness();
 
     if (g_tests_failed != 0) {
         keel::eprintln("{} test check(s) FAILED ({} passed)", g_tests_failed, g_tests_passed);

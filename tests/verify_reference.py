@@ -159,6 +159,32 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
     _, got_p_rgb = run_keel_decode(exe, p_idx, raw, expand=True)
     assert_exact("pillow->keel:png_indexed_expand", got_p_rgb, ref_p_rgb, stats)
 
+    # PNG tRNS transparency (grayscale key, RGB key, indexed PLTE+tRNS) -> bit-exact vs Pillow!
+    g_trns = make_pattern(25, 31, 1, np.uint8, 15)
+    g_trns[0, 0] = 77
+    g_trns[12, 15] = 77
+    p_gtrns = tmp / "png_gray_trns.png"
+    Image.fromarray(g_trns, mode="L").save(p_gtrns, format="PNG", transparency=77)
+    ref_gtrns = np.array(Image.open(p_gtrns).convert("LA"))
+    _, got_gtrns = run_keel_decode(exe, p_gtrns, raw)
+    assert_exact("pillow->keel:png_gray_trns", got_gtrns, ref_gtrns, stats)
+
+    rgb_trns = make_pattern(21, 29, 3, np.uint8, 16)
+    rgb_trns[3, 4] = [11, 22, 33]
+    rgb_trns[17, 20] = [11, 22, 33]
+    p_rgbtrns = tmp / "png_rgb_trns.png"
+    Image.fromarray(rgb_trns, mode="RGB").save(p_rgbtrns, format="PNG", transparency=(11, 22, 33))
+    ref_rgbtrns = np.array(Image.open(p_rgbtrns).convert("RGBA"))
+    _, got_rgbtrns = run_keel_decode(exe, p_rgbtrns, raw)
+    assert_exact("pillow->keel:png_rgb_trns", got_rgbtrns, ref_rgbtrns, stats)
+
+    p_paltrns = tmp / "png_plte_trns.png"
+    pal_alphas = bytes([0, 64, 128, 192] + [255] * 28)
+    im_p.save(p_paltrns, format="PNG", transparency=pal_alphas)
+    ref_paltrns = np.array(Image.open(p_paltrns).convert("RGBA"))
+    _, got_paltrns = run_keel_decode(exe, p_paltrns, raw, expand=True)
+    assert_exact("pillow->keel:png_plte_trns", got_paltrns, ref_paltrns, stats)
+
     # keel -> Pillow PNG (8-bit L/LA/RGB/RGBA + 16-bit L)
     for name, arr, stype in [
         ("png_l8", make_pattern(31, 47, 1, np.uint8, 10), "u8"),
@@ -193,9 +219,60 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
         Image.fromarray(arr, mode=mode).save(p, format="JPEG", **kwargs)
         ref = np.array(Image.open(p))
         _, got = run_keel_decode(exe, p, raw)
-        # Allow small IDCT / chroma nearest-vs-fancy upsampling tolerance vs libjpeg-turbo
-        max_abs = 12.0 if kwargs.get("subsampling", 0) != 0 else 4.0
-        assert_close(f"pillow->keel:{name}", got, ref, max_mae=2.0, max_abs=max_abs, stats=stats)
+        # Triangle (3:1 / 9:3:3:1) chroma upsampling matches libjpeg-turbo fancy upsampling within <= 4 LSB
+        assert_close(f"pillow->keel:{name}", got, ref, max_mae=1.0, max_abs=4.0, stats=stats)
+
+    # Multi-scan non-interleaved baseline JPEG (3 separate SOS scans for Y, Cb, Cr) -> verified vs Pillow!
+    p_ms = tmp / "jpg_multiscan_baseline.jpg"
+    p_base444 = tmp / "jpg_rgb_444.jpg"
+    # Build a valid 3-scan non-interleaved SOF0 JPEG (16x16 4:2:0) using standard DC/AC Huffman tables
+    # and decode the exact same bitstream with BOTH Pillow (libjpeg-turbo) and keel!
+    def build_multiscan_baseline_jpg() -> bytes:
+        # 16x16 4:2:0 image: 4 Y blocks (2x2), 1 Cb block, 1 Cr block in 3 separate SOS scans!
+        # Minimal DC-only Huffman tables: symbol 0 (diff=0) -> code '0', symbol 4 (4-bit diff) -> code '10'
+        # AC table: symbol 0x00 (EOB) -> code '0'
+        out = bytearray(b"\xff\xd8")
+        # DQT id=0 (all 8s)
+        out += b"\xff\xdb" + struct.pack(">HB", 67, 0) + bytes([8] * 64)
+        # SOF0: 16x16, 3 comps: Y(2x2, q=0), Cb(1x1, q=0), Cr(1x1, q=0)
+        out += b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, 16, 16, 3)
+        out += bytes([1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0])
+        # DHT DC0: 1 code of len 1 (sym 0x00), 1 code of len 2 (sym 0x04)
+        dc_counts = bytes([1, 1] + [0] * 14)
+        out += b"\xff\xc4" + struct.pack(">HB", 2 + 1 + 16 + 2, 0x00) + dc_counts + bytes([0x00, 0x04])
+        # DHT AC0: 1 code of len 1 (sym 0x00 = EOB)
+        ac_counts = bytes([1] + [0] * 15)
+        out += b"\xff\xc4" + struct.pack(">HB", 2 + 1 + 16 + 1, 0x10) + ac_counts + bytes([0x00])
+
+        def pack_bits(bitstr: str) -> bytes:
+            pad = (8 - (len(bitstr) % 8)) % 8
+            bitstr += "1" * pad
+            res = bytearray()
+            for i in range(0, len(bitstr), 8):
+                b = int(bitstr[i:i + 8], 2)
+                res.append(b)
+                if b == 0xFF:
+                    res.append(0x00)
+            return bytes(res)
+
+        # Scan 1: Y (4 blocks: DC diffs = +12, -8, +10, -14; cat=4 -> '10' + 4-bit amplitude, then AC EOB '0')
+        def enc_dc4(v: int) -> str:
+            bits = v if v > 0 else (v + 15)
+            return "10" + f"{bits:04b}" + "0"
+
+        y_bits = enc_dc4(12) + enc_dc4(-8) + enc_dc4(10) + enc_dc4(-14)
+        out += b"\xff\xda" + struct.pack(">HBBBBBB", 8, 1, 1, 0x00, 0, 63, 0) + pack_bits(y_bits)
+        # Scan 2: Cb (1 block: DC diff = -10)
+        out += b"\xff\xda" + struct.pack(">HBBBBBB", 8, 1, 2, 0x00, 0, 63, 0) + pack_bits(enc_dc4(-10))
+        # Scan 3: Cr (1 block: DC diff = +11)
+        out += b"\xff\xda" + struct.pack(">HBBBBBB", 8, 1, 3, 0x00, 0, 63, 0) + pack_bits(enc_dc4(11))
+        out += b"\xff\xd9"
+        return bytes(out)
+
+    p_ms.write_bytes(build_multiscan_baseline_jpg())
+    ref_ms = np.array(Image.open(p_ms))
+    _, got_ms = run_keel_decode(exe, p_ms, raw)
+    assert_close("pillow->keel:jpg_multiscan_baseline_420", got_ms, ref_ms, max_mae=1.0, max_abs=3.0, stats=stats)
 
     # keel -> Pillow JPEG (grayscale & RGB, odd dimensions)
     for name, arr in [
@@ -269,7 +346,50 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
     for i, exp in enumerate([kp0, kp1, kp2]):
         assert_exact(f"keel->pillow:tif_multipage_upgrade_p{i}", frames[i], exp, stats)
 
-    # ---- 4. BMP (bit-exact bidirectional) ----
+    # TIFF Predictor == 3 (Adobe Floating-Point Predictor, F32 Deflate) verified against Pillow/libtiff!
+    fp_arr = make_pattern(23, 31, 1, np.float32, 48)
+    H_fp, W_fp = fp_arr.shape
+    be_fp = fp_arr.astype(">f4").tobytes()
+    fp_rows = []
+    for r in range(H_fp):
+        plane = bytes(be_fp[r * W_fp * 4 + s * 4 + b] for b in range(4) for s in range(W_fp))
+        fp_rows.append(bytes([plane[0]] + [(plane[i] - plane[i - 1]) & 255 for i in range(1, len(plane))]))
+    import zlib
+    fp_comp = zlib.compress(b"".join(fp_rows))
+    fp_tags = [
+        (256, 4, 1, W_fp), (257, 4, 1, H_fp), (258, 3, 1, 32), (259, 3, 1, 8), (262, 3, 1, 1),
+        (273, 4, 1, 8 + 2 + 11 * 12 + 4), (277, 3, 1, 1), (278, 4, 1, H_fp),
+        (279, 4, 1, len(fp_comp)), (317, 3, 1, 3), (339, 3, 1, 3),
+    ]
+    fp_tif = (b"II*\x00" + struct.pack("<IH", 8, len(fp_tags))
+              + b"".join(struct.pack("<HHII", t, ty, c, v) for t, ty, c, v in fp_tags)
+              + struct.pack("<I", 0) + fp_comp)
+    p_fp3 = tmp / "tif_pred3_f32.tif"
+    p_fp3.write_bytes(fp_tif)
+    ref_fp3 = np.array(Image.open(p_fp3))
+    _, got_fp3 = run_keel_decode(exe, p_fp3, raw)
+    assert_exact("pillow->keel:tif_pred3_f32", got_fp3, ref_fp3, stats)
+
+    # ---- 4. BMP (bit-exact bidirectional, incl. BI_RLE4) ----
+    # BI_RLE4 4-bit BMP decoded by BOTH Pillow and keel -> bit-exact!
+    rle4_data = bytes([
+        4, 0x12, 0, 4, 0x34, 0x56, 0, 0,  # row 0 (8 px): encoded 4 + abs 4 (2B even) + EOL
+        0, 6, 0x12, 0x34, 0x56, 0x00, 2, 0x78, 0, 0,  # row 1 (8 px): abs 6 (3B odd + 1 pad) + encoded 2 + EOL
+        0, 1,  # EOB
+    ])
+    pal4 = b"".join(bytes([i * 15, i * 11, i * 17, 0]) for i in range(16))
+    off4 = 14 + 40 + len(pal4)
+    bmp_rle4 = (
+        b"BM" + struct.pack("<IHHIIiiHHIIIIII", off4 + len(rle4_data), 0, 0, off4,
+                            40, 8, 2, 1, 4, 2, len(rle4_data), 2835, 2835, 16, 0)
+        + pal4 + rle4_data
+    )
+    p_rle4 = tmp / "bmp_rle4.bmp"
+    p_rle4.write_bytes(bmp_rle4)
+    with Image.open(p_rle4) as im_rle4:
+        ref_rle4 = np.array(im_rle4.convert("RGB"))
+    _, got_rle4 = run_keel_decode(exe, p_rle4, raw)
+    assert_exact("pillow->keel:bmp_rle4", got_rle4, ref_rle4, stats)
     for name, arr, mode in [
         ("bmp_l8", make_pattern(33, 29, 1, np.uint8, 50), "L"),
         ("bmp_rgb24", make_pattern(37, 41, 3, np.uint8, 51), "RGB"),
@@ -351,7 +471,7 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
             pil_arr = pil_arr.astype(np.uint8) * 255
         assert_exact(f"keel->pillow:pnm_{fmt_tag}", pil_arr, arr, stats)
 
-    # ---- 7. GIF (normal & interlaced, Pillow -> keel bit-exact) ----
+    # ---- 7. GIF (normal, interlaced, multi-frame animated w/ GCE transparency & disposal 1/2/3) ----
     for interlace in [False, True]:
         p_gif = tmp / f"pil_interlace{int(interlace)}.gif"
         im_g = Image.fromarray(make_smooth_rgb(35, 47), mode="RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=64)
@@ -359,6 +479,40 @@ def verify_pillow(exe: Path, tmp: Path, stats: list):
         ref_rgb = np.array(Image.open(p_gif).convert("RGB"))
         _, got_rgb = run_keel_decode(exe, p_gif, raw, expand=True)
         assert_exact(f"pillow->keel:gif_interlace{int(interlace)}", got_rgb, ref_rgb, stats)
+
+    # Multi-frame animated GIF with sub-rectangles, transparency, and disposal=1,2,3 -> bit-exact per frame vs Pillow!
+    p_anim = tmp / "pil_animated.gif"
+    anim_frames = []
+    for k in range(4):
+        rgba = np.zeros((24, 32, 4), dtype=np.uint8)
+        if k == 0:
+            rgba[1:, 1:, :3] = [40, 80, 160]
+            rgba[1:, 1:, 3] = 255
+        elif k == 1:
+            rgba[4:16, 6:22] = [220, 40, 40, 255]
+        elif k == 2:
+            rgba[8:20, 10:28] = [40, 200, 60, 255]
+        else:
+            rgba[2:14, 14:30] = [240, 220, 30, 255]
+        anim_frames.append(Image.fromarray(rgba, mode="RGBA"))
+    anim_frames[0].save(
+        p_anim, format="GIF", save_all=True, append_images=anim_frames[1:],
+        duration=100, loop=0, disposal=[1, 2, 3, 1],
+    )
+    with Image.open(p_anim) as im_anim:
+        pil_anim_frames = [np.array(f.convert("RGBA")) for f in ImageSequence.Iterator(im_anim)]
+    assert len(pil_anim_frames) == 4
+    for idx_f, ref_f in enumerate(pil_anim_frames):
+        meta_f, got_f = run_keel_decode(exe, p_anim, raw, page=idx_f, expand=True)
+        assert meta_f["page_count"] == 4
+        if got_f.ndim == 3 and got_f.shape[2] == 3:
+            got_f = np.concatenate([got_f, np.full((got_f.shape[0], got_f.shape[1], 1), 255, dtype=np.uint8)], axis=-1)
+        # Normalize undefined RGB of fully transparent (alpha==0) pixels before bit-exact check
+        ref_norm = ref_f.copy()
+        got_norm = got_f.copy()
+        ref_norm[ref_norm[:, :, 3] == 0] = 0
+        got_norm[got_norm[:, :, 3] == 0] = 0
+        assert_exact(f"pillow->keel:gif_anim_frame{idx_f}", got_norm, ref_norm, stats)
 
 
 def verify_ffmpeg(exe: Path, tmp: Path, stats: list):
@@ -441,6 +595,29 @@ def verify_ffmpeg(exe: Path, tmp: Path, stats: list):
     _, got565 = run_keel_decode(exe, p_bmp565, raw)
     # Bit-replication vs round-to-nearest differs by at most 1 LSB
     assert_close("ffmpeg->keel:bmp_rgb565_bitfields", got565, ref565, max_mae=0.5, max_abs=1.0, stats=stats)
+
+    # 6. BI_RLE4 with odd-nibble absolute run verified bit-exact against FFmpeg (libavcodec/bmp.c)!
+    rle4_odd = bytes([
+        4, 0x12, 0, 4, 0x34, 0x56, 0, 0,
+        0, 5, 0x12, 0x34, 0x50, 0x00, 3, 0x67, 0, 0,
+        0, 1,
+    ])
+    pal4 = b"".join(bytes([i * 15, i * 11, i * 17, 0]) for i in range(16))
+    off4 = 14 + 40 + len(pal4)
+    p_rle4_odd = tmp / "ff_bmp_rle4_odd.bmp"
+    p_rle4_odd.write_bytes(
+        b"BM" + struct.pack("<IHHIIiiHHIIIIII", off4 + len(rle4_odd), 0, 0, off4,
+                            40, 8, 2, 1, 4, 2, len(rle4_odd), 2835, 2835, 16, 0)
+        + pal4 + rle4_odd
+    )
+    ff_rle4_raw = tmp / "ff_rle4_odd.raw"
+    subprocess.run(
+        [ffmpeg, "-y", "-i", str(p_rle4_odd), "-f", "rawvideo", "-pix_fmt", "rgb24", str(ff_rle4_raw)],
+        check=True, capture_output=True
+    )
+    ref_rle4_odd = np.frombuffer(ff_rle4_raw.read_bytes(), dtype=np.uint8).reshape((2, 8, 3))
+    _, got_rle4_odd = run_keel_decode(exe, p_rle4_odd, raw)
+    assert_exact("ffmpeg->keel:bmp_rle4_odd_abs", got_rle4_odd, ref_rle4_odd, stats)
 
 
 def verify_matlab(exe: Path, tmp: Path, stats: list):

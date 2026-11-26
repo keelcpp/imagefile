@@ -138,7 +138,7 @@ if(KEEL_IMAGEFILE_BUILD_TESTS)
     enable_testing()
 
     add_executable(test_imagefile tests/test_imagefile.cpp)
-    target_link_libraries(test_imagefile PRIVATE keel::imagefile)
+    target_link_libraries(test_imagefile PRIVATE keel::imagefile keel::compress)
     target_compile_definitions(test_imagefile PRIVATE
         KEEL_IMAGEFILE_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )

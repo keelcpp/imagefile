@@ -404,6 +404,31 @@ void decode_prog_ac_refine(JpegBitReader& reader, const DecHuffTable& ac_ht, i16
     }
 }
 
+void decode_block_coefs(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuffTable& ac_ht, i32& last_dc,
+                        i16 blk[64]) noexcept {
+    mem_zero(blk, sizeof(i16) * 64u);
+    const i32 dc_cat = reader.decode_symbol(dc_ht);
+    const i32 dc_diff = reader.decode_value(dc_cat);
+    last_dc += dc_diff;
+    blk[0] = as<i16>(last_dc);
+
+    i32 k = 1;
+    while (k < 64) {
+        const i32 sym = reader.decode_symbol(ac_ht);
+        if (sym == 0x00) break; // EOB
+        if (sym == 0xF0) {      // ZRL (16 zeros)
+            k += 16;
+            continue;
+        }
+        const i32 run = (sym >> 4) & 0x0F;
+        const i32 cat = sym & 0x0F;
+        k += run;
+        if (k >= 64) break;
+        blk[k] = as<i16>(reader.decode_value(cat));
+        ++k;
+    }
+}
+
 void decode_block(JpegBitReader& reader, const DecHuffTable& dc_ht, const DecHuffTable& ac_ht, const u16 q_table[64],
                   i32& last_dc, f32 out_spatial[64]) noexcept {
     f32 freq[64]{};
@@ -660,6 +685,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     u16 channels = 0;
     bool saw_sof = false;
     bool is_progressive = false;
+    bool is_multi_scan = false;
     bool prog_allocated = false;
     bool saw_prog_scan = false;
     u32 prog_max_h = 1;
@@ -691,7 +717,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             ++p;
         }
         if (p >= len) [[unlikely]] {
-            if (is_progressive && saw_prog_scan) break;
+            if (is_multi_scan && saw_prog_scan) break;
             return ErrorCode::EndOfFile;
         }
         const u8 marker = data[p++];
@@ -700,7 +726,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             continue;
         }
         if (marker == 0xD9u) {
-            if (is_progressive && saw_prog_scan) {
+            if (is_multi_scan && saw_prog_scan) {
                 break;
             }
             return ErrorCode::InvalidData; // EOI before SOS
@@ -726,6 +752,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         if (jpeg_impl::is_sof_marker(marker)) {
             if (marker == 0xC2u) {
                 is_progressive = true;
+                is_multi_scan = true;
             }
             if (payload_len < 6) [[unlikely]] {
                 return ErrorCode::InvalidData;
@@ -794,24 +821,28 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                     return ErrorCode::InvalidData;
                 }
             }
-            if (!is_progressive) {
-                if (num_scan_comps != channels) [[unlikely]] {
-                    return ErrorCode::NotSupported;
-                }
+            if (!is_multi_scan && num_scan_comps == channels) {
                 for (u8 j = 0; j < num_scan_comps; ++j) {
                     baseline_scan_order[j] = scan_comp_idx[j];
                 }
                 sos_offset = p + seg_len;
                 break;
             }
+            is_multi_scan = true;
 
             const i32 ss = seg[1u + as<usize>(num_scan_comps) * 2u];
             const i32 se = seg[2u + as<usize>(num_scan_comps) * 2u];
             const u8 ah_al = seg[3u + as<usize>(num_scan_comps) * 2u];
             const i32 ah = (ah_al >> 4) & 0x0F;
             const i32 al = ah_al & 0x0F;
-            if (ss > se || se >= 64 || al > 13 || ah > 14 || (num_scan_comps > 1 && ss > 0)) [[unlikely]] {
-                return ErrorCode::InvalidData;
+            if (is_progressive) {
+                if (ss > se || se >= 64 || al > 13 || ah > 14 || (num_scan_comps > 1 && ss > 0)) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
+            } else {
+                if (ss != 0 || se != 63 || ah != 0 || al != 0) [[unlikely]] {
+                    return ErrorCode::InvalidData;
+                }
             }
 
             if (!prog_allocated) {
@@ -837,6 +868,23 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                 prog_allocated = true;
             }
 
+            if (!is_progressive) {
+                if (!dc_huff[0].populated) {
+                    dc_huff[0].set_default(jpeg_impl::kDcBitsLuma, jpeg_impl::kDcValLuma, sizeof(jpeg_impl::kDcValLuma));
+                }
+                if (!dc_huff[1].populated) {
+                    dc_huff[1].set_default(jpeg_impl::kDcBitsChroma, jpeg_impl::kDcValChroma,
+                                           sizeof(jpeg_impl::kDcValChroma));
+                }
+                if (!ac_huff[0].populated) {
+                    ac_huff[0].set_default(jpeg_impl::kAcBitsLuma, jpeg_impl::kAcValLuma, sizeof(jpeg_impl::kAcValLuma));
+                }
+                if (!ac_huff[1].populated) {
+                    ac_huff[1].set_default(jpeg_impl::kAcBitsChroma, jpeg_impl::kAcValChroma,
+                                           sizeof(jpeg_impl::kAcValChroma));
+                }
+            }
+
             for (i32 ti = 0; ti < 4; ++ti) {
                 if (dc_huff[ti].populated && !dc_huff[ti].build()) [[unlikely]] {
                     return ErrorCode::InvalidData;
@@ -847,11 +895,17 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
             }
             for (u8 j = 0; j < num_scan_comps; ++j) {
                 const ComponentInfo& c = comps[scan_comp_idx[j]];
-                if (ss == 0 && ah == 0 && !dc_huff[c.dc_table_id].populated) [[unlikely]] {
-                    return ErrorCode::InvalidData;
-                }
-                if (ss > 0 && !ac_huff[c.ac_table_id].populated) [[unlikely]] {
-                    return ErrorCode::InvalidData;
+                if (!is_progressive) {
+                    if (!dc_huff[c.dc_table_id].populated || !ac_huff[c.ac_table_id].populated) [[unlikely]] {
+                        return ErrorCode::InvalidData;
+                    }
+                } else {
+                    if (ss == 0 && ah == 0 && !dc_huff[c.dc_table_id].populated) [[unlikely]] {
+                        return ErrorCode::InvalidData;
+                    }
+                    if (ss > 0 && !ac_huff[c.ac_table_id].populated) [[unlikely]] {
+                        return ErrorCode::InvalidData;
+                    }
                 }
             }
 
@@ -878,7 +932,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                         }
                         i16* blk = prog_coefs[ci].data() +
                                    (as<usize>(by) * as<usize>(prog_blocks_w[ci]) + as<usize>(bx)) * 64u;
-                        if (ss == 0) {
+                        if (!is_progressive) {
+                            jpeg_impl::decode_block_coefs(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
+                                                          last_dc[ci], blk);
+                        } else if (ss == 0) {
                             if (ah == 0) {
                                 jpeg_impl::decode_prog_dc_first(reader, dc_huff[c.dc_table_id], last_dc[ci], blk, al);
                             } else {
@@ -910,7 +967,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                                     const usize by = as<usize>(my) * c.v_samp + v;
                                     const usize bx = as<usize>(mx) * c.h_samp + h;
                                     i16* blk = prog_coefs[ci].data() + (by * prog_blocks_w[ci] + bx) * 64u;
-                                    if (ah == 0) {
+                                    if (!is_progressive) {
+                                        jpeg_impl::decode_block_coefs(reader, dc_huff[c.dc_table_id],
+                                                                      ac_huff[c.ac_table_id], last_dc[ci], blk);
+                                    } else if (ah == 0) {
                                         jpeg_impl::decode_prog_dc_first(reader, dc_huff[c.dc_table_id], last_dc[ci],
                                                                         blk, al);
                                     } else {
@@ -994,10 +1054,10 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         p += seg_len;
     }
 
-    if (!saw_sof || (!is_progressive && sos_offset == 0) || (is_progressive && !saw_prog_scan)) [[unlikely]] {
+    if (!saw_sof || (!is_multi_scan && sos_offset == 0) || (is_multi_scan && !saw_prog_scan)) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
-    if (!is_progressive && sos_offset >= len) [[unlikely]] {
+    if (!is_multi_scan && sos_offset >= len) [[unlikely]] {
         return ErrorCode::EndOfFile;
     }
 
@@ -1023,7 +1083,7 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
         }
     }
 
-    if (!is_progressive) {
+    if (!is_multi_scan) {
         if (!dc_huff[0].populated) {
             dc_huff[0].set_default(jpeg_impl::kDcBitsLuma, jpeg_impl::kDcValLuma, sizeof(jpeg_impl::kDcValLuma));
         }
@@ -1073,32 +1133,142 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
     u8* dst = img.pixels.data();
     const usize row_stride = as<usize>(width) * as<usize>(channels);
 
+    bool needs_upsample = false;
+    if (channels == 3) {
+        for (u16 ci = 0; ci < channels; ++ci) {
+            if (comps[ci].h_samp != max_h || comps[ci].v_samp != max_v) {
+                needs_upsample = true;
+                break;
+            }
+        }
+    }
+
     // Per-MCU spatial component buffers (at most 4x4 blocks = 32x32 floats per component).
     f32 mcu_planes[3][32 * 32]{};
     i32 last_dc[3] = {0, 0, 0};
 
-    jpeg_impl::JpegBitReader reader(is_progressive ? nullptr : (data + sos_offset),
-                                    is_progressive ? 0u : (len - sos_offset));
+    jpeg_impl::JpegBitReader reader(is_multi_scan ? nullptr : (data + sos_offset),
+                                    is_multi_scan ? 0u : (len - sos_offset));
     usize mcu_count = 0;
+
+    if (!needs_upsample) {
+        for (u32 my = 0; my < mcu_rows; ++my) {
+            for (u32 mx = 0; mx < mcu_cols; ++mx) {
+                if (!is_multi_scan && restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
+                    reader.align_byte();
+                    last_dc[0] = 0;
+                    last_dc[1] = 0;
+                    last_dc[2] = 0;
+                }
+
+                for (u16 si = 0; si < channels; ++si) {
+                    const u16 ci = is_multi_scan ? si : baseline_scan_order[si];
+                    const ComponentInfo& c = comps[ci];
+                    const u32 cw = as<u32>(c.h_samp) * 8u;
+                    f32* plane = mcu_planes[ci];
+                    for (u32 v = 0; v < c.v_samp; ++v) {
+                        for (u32 h = 0; h < c.h_samp; ++h) {
+                            f32 spatial[64];
+                            if (is_multi_scan) {
+                                const usize by_blk = as<usize>(my) * c.v_samp + v;
+                                const usize bx_blk = as<usize>(mx) * c.h_samp + h;
+                                const i16* blk = prog_coefs[ci].data() + (by_blk * prog_blocks_w[ci] + bx_blk) * 64u;
+                                f32 freq[64]{};
+                                const u16* qt = q_tables[c.q_table_id];
+                                for (i32 k = 0; k < 64; ++k) {
+                                    freq[jpeg_impl::kZigzag[k]] = as<f32>(as<i32>(blk[k]) * as<i32>(qt[k]));
+                                }
+                                jpeg_impl::idct8x8(freq, spatial);
+                            } else {
+                                jpeg_impl::decode_block(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
+                                                        q_tables[c.q_table_id], last_dc[ci], spatial);
+                            }
+                            const u32 br = v * 8u;
+                            const u32 bc = h * 8u;
+                            for (u32 by = 0; by < 8u; ++by) {
+                                for (u32 bx = 0; bx < 8u; ++bx) {
+                                    plane[(br + by) * cw + (bc + bx)] = spatial[by * 8u + bx];
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const u32 r0 = my * mcu_px_h;
+                const u32 c0 = mx * mcu_px_w;
+                const u32 ly_end = (r0 + mcu_px_h <= height) ? mcu_px_h : (height - r0);
+                const u32 lx_end = (c0 + mcu_px_w <= width) ? mcu_px_w : (width - c0);
+
+                if (channels == 1) {
+                    const u32 y_stride = as<u32>(comps[0].h_samp) * 8u;
+                    for (u32 ly = 0; ly < ly_end; ++ly) {
+                        u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0);
+                        for (u32 lx = 0; lx < lx_end; ++lx) {
+                            const f32 y_val = mcu_planes[0][ly * y_stride + lx] + 128.0f;
+                            out_row[lx] = jpeg_impl::clamp_f32_to_u8(y_val);
+                        }
+                    }
+                } else {
+                    const u32 y_w = as<u32>(comps[0].h_samp) * 8u;
+                    const u32 cb_w = as<u32>(comps[1].h_samp) * 8u;
+                    const u32 cr_w = as<u32>(comps[2].h_samp) * 8u;
+                    for (u32 ly = 0; ly < ly_end; ++ly) {
+                        u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0) * 3u;
+                        for (u32 lx = 0; lx < lx_end; ++lx) {
+                            const f32 y_val = mcu_planes[0][ly * y_w + lx];
+                            const f32 cb_val = mcu_planes[1][ly * cb_w + lx];
+                            const f32 cr_val = mcu_planes[2][ly * cr_w + lx];
+
+                            const f32 r = y_val + 1.402f * cr_val + 128.0f;
+                            const f32 g = y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.0f;
+                            const f32 b = y_val + 1.772f * cb_val + 128.0f;
+
+                            out_row[lx * 3u + 0] = jpeg_impl::clamp_f32_to_u8(r);
+                            out_row[lx * 3u + 1] = jpeg_impl::clamp_f32_to_u8(g);
+                            out_row[lx * 3u + 2] = jpeg_impl::clamp_f32_to_u8(b);
+                        }
+                    }
+                }
+
+                ++mcu_count;
+            }
+        }
+        return img;
+    }
+
+    // Subsampled 3-channel path: decode clamped 8-bit component planes so triangle (3:1 / 9:3:3:1)
+    // chroma upsampling works seamlessly across MCU boundaries without block-edge seams.
+    ArenaTemp scratch = get_scratch(opts.allocator);
+    Allocator* plane_alloc = (total_bytes <= 8ULL * 1024 * 1024) ? scratch.allocator() : opts.allocator;
+    u32 comp_w[3]{};
+    u32 comp_h[3]{};
+    Array<u8> comp_planes[3];
+    for (u16 ci = 0; ci < 3; ++ci) {
+        comp_w[ci] = (width * comps[ci].h_samp + max_h - 1u) / max_h;
+        comp_h[ci] = (height * comps[ci].v_samp + max_v - 1u) / max_v;
+        comp_planes[ci] = Array<u8>(as<usize>(comp_w[ci]) * as<usize>(comp_h[ci]), u8{128}, plane_alloc);
+    }
 
     for (u32 my = 0; my < mcu_rows; ++my) {
         for (u32 mx = 0; mx < mcu_cols; ++mx) {
-            if (!is_progressive && restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
+            if (!is_multi_scan && restart_interval > 0 && mcu_count > 0 && (mcu_count % restart_interval == 0)) {
                 reader.align_byte();
                 last_dc[0] = 0;
                 last_dc[1] = 0;
                 last_dc[2] = 0;
             }
 
-            for (u16 si = 0; si < channels; ++si) {
-                const u16 ci = is_progressive ? si : baseline_scan_order[si];
+            for (u16 si = 0; si < 3; ++si) {
+                const u16 ci = is_multi_scan ? si : baseline_scan_order[si];
                 const ComponentInfo& c = comps[ci];
-                const u32 cw = as<u32>(c.h_samp) * 8u;
-                f32* plane = mcu_planes[ci];
+                const u32 cw = comp_w[ci];
+                const u32 ch = comp_h[ci];
+                u8* plane = comp_planes[ci].data();
+
                 for (u32 v = 0; v < c.v_samp; ++v) {
                     for (u32 h = 0; h < c.h_samp; ++h) {
                         f32 spatial[64];
-                        if (is_progressive) {
+                        if (is_multi_scan) {
                             const usize by_blk = as<usize>(my) * c.v_samp + v;
                             const usize bx_blk = as<usize>(mx) * c.h_samp + h;
                             const i16* blk = prog_coefs[ci].data() + (by_blk * prog_blocks_w[ci] + bx_blk) * 64u;
@@ -1112,63 +1282,82 @@ Result<Image> decode_jpeg(ArrayRef<u8> bytes, const ImageDecodeOptions& opts) {
                             jpeg_impl::decode_block(reader, dc_huff[c.dc_table_id], ac_huff[c.ac_table_id],
                                                     q_tables[c.q_table_id], last_dc[ci], spatial);
                         }
-                        const u32 br = v * 8u;
-                        const u32 bc = h * 8u;
+                        const u32 dst_y0 = (my * c.v_samp + v) * 8u;
+                        const u32 dst_x0 = (mx * c.h_samp + h) * 8u;
                         for (u32 by = 0; by < 8u; ++by) {
+                            const u32 py = dst_y0 + by;
+                            if (py >= ch) break;
+                            u8* prow = plane + as<usize>(py) * as<usize>(cw);
                             for (u32 bx = 0; bx < 8u; ++bx) {
-                                plane[(br + by) * cw + (bc + bx)] = spatial[by * 8u + bx];
+                                const u32 px = dst_x0 + bx;
+                                if (px >= cw) break;
+                                prow[px] = jpeg_impl::clamp_f32_to_u8(spatial[by * 8u + bx] + 128.0f);
                             }
                         }
                     }
                 }
             }
-
-            const u32 r0 = my * mcu_px_h;
-            const u32 c0 = mx * mcu_px_w;
-            const u32 ly_end = (r0 + mcu_px_h <= height) ? mcu_px_h : (height - r0);
-            const u32 lx_end = (c0 + mcu_px_w <= width) ? mcu_px_w : (width - c0);
-
-            if (channels == 1) {
-                const u32 y_stride = as<u32>(comps[0].h_samp) * 8u;
-                for (u32 ly = 0; ly < ly_end; ++ly) {
-                    const u32 y_r = (comps[0].v_samp == max_v) ? ly : ((ly * comps[0].v_samp) / max_v);
-                    u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0);
-                    for (u32 lx = 0; lx < lx_end; ++lx) {
-                        const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
-                        const f32 y_val = mcu_planes[0][y_r * y_stride + y_c] + 128.0f;
-                        out_row[lx] = jpeg_impl::clamp_f32_to_u8(y_val);
-                    }
-                }
-            } else {
-                const u32 y_w = as<u32>(comps[0].h_samp) * 8u;
-                const u32 cb_w = as<u32>(comps[1].h_samp) * 8u;
-                const u32 cr_w = as<u32>(comps[2].h_samp) * 8u;
-                for (u32 ly = 0; ly < ly_end; ++ly) {
-                    const u32 y_r = (comps[0].v_samp == max_v) ? ly : ((ly * comps[0].v_samp) / max_v);
-                    const u32 cb_r = (comps[1].v_samp == max_v) ? ly : ((ly * comps[1].v_samp) / max_v);
-                    const u32 cr_r = (comps[2].v_samp == max_v) ? ly : ((ly * comps[2].v_samp) / max_v);
-                    u8* out_row = dst + as<usize>(r0 + ly) * row_stride + as<usize>(c0) * 3u;
-                    for (u32 lx = 0; lx < lx_end; ++lx) {
-                        const u32 y_c = (comps[0].h_samp == max_h) ? lx : ((lx * comps[0].h_samp) / max_h);
-                        const u32 cb_c = (comps[1].h_samp == max_h) ? lx : ((lx * comps[1].h_samp) / max_h);
-                        const u32 cr_c = (comps[2].h_samp == max_h) ? lx : ((lx * comps[2].h_samp) / max_h);
-
-                        const f32 y_val = mcu_planes[0][y_r * y_w + y_c];
-                        const f32 cb_val = mcu_planes[1][cb_r * cb_w + cb_c];
-                        const f32 cr_val = mcu_planes[2][cr_r * cr_w + cr_c];
-
-                        const f32 r = y_val + 1.402f * cr_val + 128.0f;
-                        const f32 g = y_val - 0.344136f * cb_val - 0.714136f * cr_val + 128.0f;
-                        const f32 b = y_val + 1.772f * cb_val + 128.0f;
-
-                        out_row[lx * 3u + 0] = jpeg_impl::clamp_f32_to_u8(r);
-                        out_row[lx * 3u + 1] = jpeg_impl::clamp_f32_to_u8(g);
-                        out_row[lx * 3u + 2] = jpeg_impl::clamp_f32_to_u8(b);
-                    }
-                }
-            }
-
             ++mcu_count;
+        }
+    }
+
+    auto sample_component = [&](u16 ci, u32 x, u32 y) noexcept -> f32 {
+        const ComponentInfo& c = comps[ci];
+        const u32 cw = comp_w[ci];
+        const u32 ch = comp_h[ci];
+        const u8* pl = comp_planes[ci].data();
+        const bool h2 = (c.h_samp * 2u == max_h);
+        const bool v2 = (c.v_samp * 2u == max_v);
+
+        if (c.h_samp == max_h && c.v_samp == max_v) {
+            return as<f32>(pl[as<usize>(y) * as<usize>(cw) + as<usize>(x)]);
+        }
+        if (h2 && v2) {
+            // 4:2:0 triangle filter (9:3:3:1), matching libjpeg h2v2_fancy_upsample.
+            const u32 cx = x >> 1;
+            const u32 cy = y >> 1;
+            const u32 cx_far = ((x & 1u) == 0u) ? ((cx > 0u) ? (cx - 1u) : 0u) : ((cx + 1u < cw) ? (cx + 1u) : cx);
+            const u32 cy_far = ((y & 1u) == 0u) ? ((cy > 0u) ? (cy - 1u) : 0u) : ((cy + 1u < ch) ? (cy + 1u) : cy);
+            const u8* r0 = pl + as<usize>(cy) * as<usize>(cw);
+            const u8* r1 = pl + as<usize>(cy_far) * as<usize>(cw);
+            const i32 v = 9 * as<i32>(r0[cx]) + 3 * as<i32>(r0[cx_far]) + 3 * as<i32>(r1[cx]) + as<i32>(r1[cx_far]);
+            return as<f32>((v + 8) >> 4);
+        }
+        if (h2 && c.v_samp == max_v) {
+            // 4:2:2 horizontal triangle filter (3:1), matching libjpeg h2v1_fancy_upsample.
+            const u32 cx = x >> 1;
+            const u32 cx_far = ((x & 1u) == 0u) ? ((cx > 0u) ? (cx - 1u) : 0u) : ((cx + 1u < cw) ? (cx + 1u) : cx);
+            const u8* r0 = pl + as<usize>(y) * as<usize>(cw);
+            const i32 v = 3 * as<i32>(r0[cx]) + as<i32>(r0[cx_far]);
+            return as<f32>((v + 2) >> 2);
+        }
+        if (v2 && c.h_samp == max_h) {
+            // 4:4:0 vertical triangle filter (3:1).
+            const u32 cy = y >> 1;
+            const u32 cy_far = ((y & 1u) == 0u) ? ((cy > 0u) ? (cy - 1u) : 0u) : ((cy + 1u < ch) ? (cy + 1u) : cy);
+            const i32 v = 3 * as<i32>(pl[as<usize>(cy) * as<usize>(cw) + x]) +
+                          as<i32>(pl[as<usize>(cy_far) * as<usize>(cw) + x]);
+            return as<f32>((v + 2) >> 2);
+        }
+        const u32 cx = (x * c.h_samp) / max_h;
+        const u32 cy = (y * c.v_samp) / max_v;
+        return as<f32>(pl[as<usize>(cy) * as<usize>(cw) + as<usize>(cx)]);
+    };
+
+    for (u32 y = 0; y < height; ++y) {
+        u8* out_row = dst + as<usize>(y) * row_stride;
+        for (u32 x = 0; x < width; ++x) {
+            const f32 y_val = sample_component(0u, x, y);
+            const f32 cb_val = sample_component(1u, x, y) - 128.0f;
+            const f32 cr_val = sample_component(2u, x, y) - 128.0f;
+
+            const f32 r = y_val + 1.402f * cr_val;
+            const f32 g = y_val - 0.344136f * cb_val - 0.714136f * cr_val;
+            const f32 b = y_val + 1.772f * cb_val;
+
+            out_row[x * 3u + 0u] = jpeg_impl::clamp_f32_to_u8(r);
+            out_row[x * 3u + 1u] = jpeg_impl::clamp_f32_to_u8(g);
+            out_row[x * 3u + 2u] = jpeg_impl::clamp_f32_to_u8(b);
         }
     }
 
